@@ -7,6 +7,7 @@ type AgentRuntimeStepStatus string
 type AgentRuntimeAttemptStatus string
 type ProductionArtifactStatus string
 type AgentHumanDecisionStatus string
+type AgentHandoffTriggerStatus string
 
 const (
 	AgentRunStatusPlanning      AgentRuntimeRunStatus = "planning"
@@ -41,6 +42,11 @@ const (
 	AgentHumanDecisionStatusPending   AgentHumanDecisionStatus = "pending"
 	AgentHumanDecisionStatusResolved  AgentHumanDecisionStatus = "resolved"
 	AgentHumanDecisionStatusCancelled AgentHumanDecisionStatus = "cancelled"
+
+	AgentHandoffTriggerStatusPending    AgentHandoffTriggerStatus = "pending"
+	AgentHandoffTriggerStatusProcessing AgentHandoffTriggerStatus = "processing"
+	AgentHandoffTriggerStatusCompleted  AgentHandoffTriggerStatus = "completed"
+	AgentHandoffTriggerStatusFailed     AgentHandoffTriggerStatus = "failed"
 )
 
 // AgentRuntimeRun is the durable orchestration root. Provider credentials and
@@ -54,7 +60,11 @@ type AgentRuntimeRun struct {
 	RegistryID      string                `json:"registryId" gorm:"size:80"`
 	RegistryVersion string                `json:"registryVersion" gorm:"size:32"`
 	RegistryDigest  string                `json:"registryDigest" gorm:"size:64"`
+	RouteKind       string                `json:"routeKind" gorm:"index;size:24"`
 	IntentRouteID   string                `json:"intentRouteId" gorm:"index;size:24"`
+	HandoffRouteID  string                `json:"handoffRouteId,omitempty" gorm:"index;size:24"`
+	RootRunID       string                `json:"rootRunId" gorm:"index;size:36"`
+	ParentRunID     string                `json:"parentRunId,omitempty" gorm:"index;size:36"`
 	Status          AgentRuntimeRunStatus `json:"status" gorm:"index;size:24"`
 	Objective       string                `json:"objective" gorm:"type:text"`
 	InputJSON       string                `json:"inputJson" gorm:"type:text"`
@@ -87,6 +97,8 @@ type AgentRuntimeStep struct {
 	ExpectedOutputArtifactTypesJSON string                 `json:"expectedOutputArtifactTypesJson" gorm:"type:text"`
 	OutputArtifactRefsJSON          string                 `json:"outputArtifactRefsJson" gorm:"type:text"`
 	AttemptSequence                 int                    `json:"attemptSequence"`
+	LeaseOwner                      string                 `json:"-" gorm:"index;size:120"`
+	LeaseExpiresAt                  *time.Time             `json:"-" gorm:"index"`
 	Revision                        int64                  `json:"revision"`
 	FailureCode                     string                 `json:"failureCode,omitempty" gorm:"size:80"`
 	Failure                         string                 `json:"failure,omitempty" gorm:"type:text"`
@@ -157,6 +169,8 @@ type ProductionArtifactRevision struct {
 type AgentRoutingDecision struct {
 	ID                    string    `json:"id" gorm:"primaryKey;size:36"`
 	RunID                 string    `json:"runId" gorm:"index;size:36"`
+	RouteKind             string    `json:"routeKind" gorm:"index;size:24"`
+	RouteID               string    `json:"routeId" gorm:"index;size:24"`
 	IntentRouteID         string    `json:"intentRouteId" gorm:"index;size:24"`
 	SelectedAgentID       string    `json:"selectedAgentId" gorm:"size:80"`
 	SelectedSkillIDsJSON  string    `json:"selectedSkillIdsJson" gorm:"type:text"`
@@ -202,4 +216,33 @@ type AgentRuntimeEvent struct {
 	ToStatus    string    `json:"toStatus,omitempty" gorm:"size:24"`
 	PayloadJSON string    `json:"payloadJson" gorm:"type:text"`
 	CreatedAt   time.Time `json:"createdAt" gorm:"index"`
+}
+
+// AgentHandoffTrigger is a durable outbox fact created in the same transaction
+// as a user-approved locked Artifact revision. Processing may be retried without
+// creating duplicate Handoff Runs because each Run has a deterministic
+// idempotency key derived from its route and immutable input revisions.
+type AgentHandoffTrigger struct {
+	ID                  string                    `json:"id" gorm:"primaryKey;size:36"`
+	UserID              string                    `json:"userId" gorm:"index;size:36"`
+	ProjectID           string                    `json:"projectId" gorm:"index;size:36"`
+	Domain              string                    `json:"domain" gorm:"index;size:32"`
+	RootRunID           string                    `json:"rootRunId" gorm:"index;size:36"`
+	ArtifactID          string                    `json:"artifactId" gorm:"index;size:36"`
+	RevisionID          string                    `json:"revisionId" gorm:"uniqueIndex;size:36"`
+	SourceRunID         string                    `json:"sourceRunId" gorm:"index;size:36"`
+	SourceStepID        string                    `json:"sourceStepId" gorm:"index;size:36"`
+	SourceAgentID       string                    `json:"sourceAgentId" gorm:"index;size:80"`
+	Status              AgentHandoffTriggerStatus `json:"status" gorm:"index;size:24"`
+	AttemptCount        int                       `json:"attemptCount"`
+	LeaseOwner          string                    `json:"-" gorm:"index;size:120"`
+	LeaseExpiresAt      *time.Time                `json:"-" gorm:"index"`
+	NextAttemptAt       *time.Time                `json:"nextAttemptAt,omitempty" gorm:"index"`
+	ScheduledRunIDsJSON string                    `json:"scheduledRunIdsJson" gorm:"type:text"`
+	FailureCode         string                    `json:"failureCode,omitempty" gorm:"size:80"`
+	Failure             string                    `json:"failure,omitempty" gorm:"type:text"`
+	Revision            int64                     `json:"revision"`
+	CompletedAt         *time.Time                `json:"completedAt,omitempty"`
+	CreatedAt           time.Time                 `json:"createdAt" gorm:"index"`
+	UpdatedAt           time.Time                 `json:"updatedAt" gorm:"index"`
 }

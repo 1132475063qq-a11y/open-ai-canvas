@@ -16,7 +16,7 @@ func CanTransitionRun(current model.AgentRuntimeRunStatus, next model.AgentRunti
 			model.AgentRunStatusFailed: true, model.AgentRunStatusCancelled: true,
 		},
 		model.AgentRunStatusRunning: {
-			model.AgentRunStatusAwaitingHuman: true, model.AgentRunStatusCompleted: true,
+			model.AgentRunStatusReady: true, model.AgentRunStatusAwaitingHuman: true, model.AgentRunStatusCompleted: true,
 			model.AgentRunStatusFailed: true, model.AgentRunStatusCancelled: true,
 		},
 		model.AgentRunStatusAwaitingHuman: {

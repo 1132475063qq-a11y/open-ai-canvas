@@ -64,6 +64,7 @@ func Models() []any {
 		&model.AgentRoutingDecision{},
 		&model.AgentHumanDecision{},
 		&model.AgentRuntimeEvent{},
+		&model.AgentHandoffTrigger{},
 		&model.ProductionArtifact{},
 		&model.ProductionArtifactRevision{},
 		&model.CanvasProject{},
@@ -98,6 +99,9 @@ func MigrateSchema(db *gorm.DB) error {
 	if err := db.AutoMigrate(Models()...); err != nil {
 		return err
 	}
+	if err := backfillAgentRuntimeLineage(db); err != nil {
+		return err
+	}
 	if err := dropLegacyPhysicalVariants(db); err != nil {
 		return err
 	}
@@ -116,6 +120,22 @@ func MigrateSchema(db *gorm.DB) error {
 		return err
 	}
 	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_nonempty ON users(lower(email)) WHERE email <> ''").Error
+}
+
+func backfillAgentRuntimeLineage(db *gorm.DB) error {
+	if err := db.Exec(`UPDATE agent_runtime_runs SET route_kind = 'intent' WHERE COALESCE(route_kind, '') = '' AND COALESCE(intent_route_id, '') <> ''`).Error; err != nil {
+		return fmt.Errorf("回填 Agent Runtime Route 类型：%w", err)
+	}
+	if err := db.Exec(`UPDATE agent_runtime_runs SET root_run_id = id WHERE COALESCE(root_run_id, '') = ''`).Error; err != nil {
+		return fmt.Errorf("回填 Agent Runtime 根链路：%w", err)
+	}
+	if err := db.Exec(`UPDATE agent_routing_decisions SET route_kind = 'intent' WHERE COALESCE(route_kind, '') = '' AND COALESCE(intent_route_id, '') <> ''`).Error; err != nil {
+		return fmt.Errorf("回填 Agent 路由决定类型：%w", err)
+	}
+	if err := db.Exec(`UPDATE agent_routing_decisions SET route_id = intent_route_id WHERE COALESCE(route_id, '') = '' AND COALESCE(intent_route_id, '') <> ''`).Error; err != nil {
+		return fmt.Errorf("回填 Agent 路由决定标识：%w", err)
+	}
+	return nil
 }
 
 // migrateLogicalRoutesToChannelModels 在模型结构切换前把历史 variant 外键转换为渠道模型外键。

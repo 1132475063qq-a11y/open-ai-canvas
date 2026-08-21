@@ -37,6 +37,7 @@ type Service struct {
 	coordinator           *runtimeCoordinator
 	runtimeErr            error
 	filmAgentRegistry     *agentruntime.Registry
+	filmAgentExecutor     filmAgentExecutor
 	workerID              string
 	routeCatalogMu        sync.RWMutex
 	routeCatalogRefreshMu sync.Mutex
@@ -209,19 +210,23 @@ func New(repo *repository.Repository, dataDir string) *Service {
 func NewWithRuntimeCapabilities(repo *repository.Repository, dataDir string, capabilities RuntimeCapabilities) *Service {
 	coordinator, coordinatorErr := newRuntimeCoordinator(repo.Dialect())
 	filmRegistry, registryErr := agentruntime.LoadFilmRegistry()
-	return &Service{
+	service := &Service{
 		repo: repo, dataDir: dataDir, runtimeCapabilities: capabilities,
 		activeCancels: make(map[string]context.CancelFunc), coordinator: coordinator,
 		runtimeErr: errors.Join(coordinatorErr, registryErr), filmAgentRegistry: filmRegistry,
 		workerID: newID(), routeCatalogTTL: 30 * time.Second, routeCatalogMaxStale: 5 * time.Minute,
 		routeHealthBlocked: make(map[string]time.Time),
 	}
+	service.filmAgentExecutor = &queuedFilmAgentExecutor{service: service, pollInterval: 500 * time.Millisecond}
+	return service
 }
 
 func (s *Service) StartWorker() {
 	s.startTextReplayCleanup()
 	s.startProviderCancellationReconciliation()
 	s.startBillingReviewAudit()
+	s.startFilmAgentWorker()
+	s.startFilmAgentHandoffWorker()
 	go func() {
 		slots := make(chan struct{}, maxChannelConcurrencyLimit)
 		dispatch := func() {
@@ -338,6 +343,18 @@ func (s *Service) SessionDetail(userID string, id string) (*SessionDetail, error
 }
 
 func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task, error) {
+	return s.createTask(userID, "", req)
+}
+
+func (s *Service) createTaskWithID(userID string, taskID string, req CreateTaskRequest) (*model.Task, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, errors.New("internal task ID is required")
+	}
+	return s.createTask(userID, taskID, req)
+}
+
+func (s *Service) createTask(userID string, taskID string, req CreateTaskRequest) (*model.Task, error) {
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
 		return nil, errors.New("prompt is required")
@@ -384,7 +401,10 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 	if taskType == "" {
 		taskType = "video_image_to_video"
 	}
-	task := model.Task{ID: newID(), UserID: userID, SessionID: req.SessionID, ProjectID: req.ProjectID, Type: taskType, Status: model.TaskStatusQueued, Stage: "等待队列调度", Progress: 5, Prompt: prompt, Operation: req.Operation, Provider: req.Provider, Model: req.Model}
+	if taskID == "" {
+		taskID = newID()
+	}
+	task := model.Task{ID: taskID, UserID: userID, SessionID: req.SessionID, ProjectID: req.ProjectID, Type: taskType, Status: model.TaskStatusQueued, Stage: "等待队列调度", Progress: 5, Prompt: prompt, Operation: req.Operation, Provider: req.Provider, Model: req.Model}
 	if routed != nil {
 		task.LogicalModelID = routed.LogicalModel.ID
 		task.LogicalModelRevisionID = routed.Revision.ID

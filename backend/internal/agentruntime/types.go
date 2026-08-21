@@ -64,15 +64,17 @@ type IntentRouteDefinition struct {
 }
 
 type HandoffRouteDefinition struct {
-	ID                  string   `json:"id"`
-	Name                string   `json:"name"`
-	FromAgentIDs        []string `json:"fromAgentIds"`
-	ToAgentIDs          []string `json:"toAgentIds"`
-	SkillIDs            []string `json:"skillIds"`
-	InputArtifactTypes  []string `json:"inputArtifactTypes"`
-	OutputArtifactTypes []string `json:"outputArtifactTypes"`
-	MessageType         string   `json:"messageType"`
-	ExecutionMode       string   `json:"executionMode"`
-	RequiresLockedInput bool     `json:"requiresLockedInput"`
-	Fanout              string   `json:"fanout"`
+	ID                          string     `json:"id"`
+	Name                        string     `json:"name"`
+	FromAgentIDs                []string   `json:"fromAgentIds"`
+	ToAgentIDs                  []string   `json:"toAgentIds"`
+	SkillIDs                    []string   `json:"skillIds"`
+	InputArtifactTypes          []string   `json:"inputArtifactTypes"`
+	RequiredInputArtifactGroups [][]string `json:"requiredInputArtifactGroups,omitempty"`
+	InputResolutionMode         string     `json:"inputResolutionMode"`
+	OutputArtifactTypes         []string   `json:"outputArtifactTypes"`
+	MessageType                 string     `json:"messageType"`
+	ExecutionMode               string     `json:"executionMode"`
+	RequiresLockedInput         bool       `json:"requiresLockedInput"`
+	Fanout                      string     `json:"fanout"`
 }

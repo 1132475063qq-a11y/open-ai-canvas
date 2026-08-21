@@ -279,6 +279,9 @@ func (registry *Registry) Validate() error {
 		if err := validateArtifactIDs(route.ID, route.InputArtifactTypes, artifacts, true); err != nil {
 			return err
 		}
+		if err := validateHandoffInputContract(route, artifacts); err != nil {
+			return err
+		}
 		if err := validateArtifactIDs(route.ID, route.OutputArtifactTypes, artifacts, true); err != nil {
 			return err
 		}
@@ -287,6 +290,49 @@ func (registry *Registry) Validate() error {
 		}
 		if route.Fanout != "single" && route.Fanout != "parallel" && route.Fanout != "dynamic" {
 			return fmt.Errorf("handoff route %s has invalid fanout", route.ID)
+		}
+	}
+	return nil
+}
+
+func validateHandoffInputContract(route HandoffRouteDefinition, artifacts map[string]ArtifactTypeDefinition) error {
+	switch route.InputResolutionMode {
+	case "static", "project_start", "project_completion":
+	default:
+		return fmt.Errorf("handoff route %s has invalid input resolution mode", route.ID)
+	}
+	if route.InputResolutionMode == "project_completion" {
+		if route.ExecutionMode != "orchestration" || len(route.RequiredInputArtifactGroups) != 0 {
+			return fmt.Errorf("handoff route %s project completion inputs must be resolved by orchestration", route.ID)
+		}
+		return nil
+	}
+	if len(route.RequiredInputArtifactGroups) == 0 {
+		return fmt.Errorf("handoff route %s has no required input Artifact groups", route.ID)
+	}
+	flattened := make([]string, 0, len(route.InputArtifactTypes))
+	seen := make(map[string]struct{}, len(route.InputArtifactTypes))
+	for groupIndex, group := range route.RequiredInputArtifactGroups {
+		if len(group) == 0 {
+			return fmt.Errorf("handoff route %s input group %d is empty", route.ID, groupIndex)
+		}
+		if err := validateArtifactIDs(route.ID, group, artifacts, true); err != nil {
+			return err
+		}
+		for _, artifactType := range group {
+			if _, duplicate := seen[artifactType]; duplicate {
+				return fmt.Errorf("handoff route %s repeats input Artifact type %s across groups", route.ID, artifactType)
+			}
+			seen[artifactType] = struct{}{}
+			flattened = append(flattened, artifactType)
+		}
+	}
+	if len(flattened) != len(route.InputArtifactTypes) {
+		return fmt.Errorf("handoff route %s grouped inputs do not cover its input Artifact catalog", route.ID)
+	}
+	for _, artifactType := range route.InputArtifactTypes {
+		if _, ok := seen[artifactType]; !ok {
+			return fmt.Errorf("handoff route %s grouped inputs omit Artifact type %s", route.ID, artifactType)
 		}
 	}
 	return nil

@@ -119,6 +119,25 @@ func RegisterFilmAgentRuntimeRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, detail)
 	})
+	film.POST("/agent-runs/:runId/artifacts/:artifactId/lock", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, filmAgentDecisionRequestLimit)
+		var request service.LockFilmAgentArtifactRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			failFilmAgentBind(c, err)
+			return
+		}
+		result, err := svc.LockFilmAgentArtifact(user.ID, c.Param("id"), c.Param("runId"), c.Param("artifactId"), request)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
 }
 
 func filmAgentRunListLimit(raw string) (int, error) {

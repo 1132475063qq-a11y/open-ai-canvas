@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +18,7 @@ var (
 	ErrAgentRuntimeStateConflict     = errors.New("agent runtime state changed concurrently")
 	ErrAgentRuntimeInvalidTransition = errors.New("agent runtime state transition is invalid")
 	ErrAgentRuntimeActiveDecision    = errors.New("agent runtime already has a pending human decision")
+	ErrAgentRuntimeLeaseLost         = errors.New("agent runtime execution lease is no longer owned")
 	ErrProductionArtifactConflict    = errors.New("production artifact changed concurrently")
 )
 
@@ -139,6 +141,82 @@ type AgentRuntimeHumanResolve struct {
 	At                       time.Time
 }
 
+type AgentRuntimeExecutionClaimCommand struct {
+	Owner         string
+	LeaseDuration time.Duration
+	AttemptID     string
+	TaskID        string
+	EventID       string
+	Executor      string
+	At            time.Time
+}
+
+type AgentRuntimeExecutionClaim struct {
+	Run       model.AgentRuntimeRun
+	Step      model.AgentRuntimeStep
+	Attempt   model.AgentRuntimeAttempt
+	Recovered bool
+}
+
+type AgentRuntimeAttemptMetadata struct {
+	Owner                   string
+	RunID                   string
+	StepID                  string
+	AttemptID               string
+	ExpectedAttemptRevision int64
+	Executor                string
+	ModelRef                string
+	InputDigest             string
+	PromptDigest            string
+	RequestJSON             string
+	At                      time.Time
+}
+
+type ProductionArtifactWrite struct {
+	Artifact         model.ProductionArtifact
+	Revision         model.ProductionArtifactRevision
+	ExpectedSequence int
+}
+
+type AgentRuntimeExecutionCompleteCommand struct {
+	Owner                   string
+	UserID                  string
+	RunID                   string
+	StepID                  string
+	AttemptID               string
+	ExpectedRunRevision     int64
+	ExpectedStepRevision    int64
+	ExpectedAttemptRevision int64
+	ResponseJSON            string
+	ArtifactWrites          []ProductionArtifactWrite
+	Event                   AgentRuntimeEventInput
+	At                      time.Time
+}
+
+type AgentRuntimeExecutionCompleteResult struct {
+	Run               model.AgentRuntimeRun
+	Step              model.AgentRuntimeStep
+	Attempt           model.AgentRuntimeAttempt
+	ReadySteps        []model.AgentRuntimeStep
+	Artifacts         []model.ProductionArtifact
+	ArtifactRevisions []model.ProductionArtifactRevision
+}
+
+type AgentRuntimeExecutionFailCommand struct {
+	Owner                   string
+	UserID                  string
+	RunID                   string
+	StepID                  string
+	AttemptID               string
+	ExpectedRunRevision     int64
+	ExpectedStepRevision    int64
+	ExpectedAttemptRevision int64
+	FailureCode             string
+	Failure                 string
+	Event                   AgentRuntimeEventInput
+	At                      time.Time
+}
+
 func (r *Repository) CreateAgentRuntimeBundle(bundle AgentRuntimeCreateBundle) error {
 	if err := validateAgentRuntimeCreateBundle(bundle); err != nil {
 		return err
@@ -239,6 +317,523 @@ func (r *Repository) AgentRuntimeDetailForUser(userID string, runID string) (Age
 		return AgentRuntimeDetail{}, err
 	}
 	return detail, nil
+}
+
+// ClaimNextAgentRuntimeExecution fences one ready Step, or recovers one whose
+// lease expired. The active Attempt is created or resumed in the same
+// transaction, so a process restart cannot create a second provider request.
+func (r *Repository) ClaimNextAgentRuntimeExecution(command AgentRuntimeExecutionClaimCommand) (*AgentRuntimeExecutionClaim, error) {
+	if strings.TrimSpace(command.Owner) == "" || command.LeaseDuration <= 0 || strings.TrimSpace(command.AttemptID) == "" ||
+		strings.TrimSpace(command.TaskID) == "" || strings.TrimSpace(command.EventID) == "" || strings.TrimSpace(command.Executor) == "" {
+		return nil, errors.New("agent runtime execution claim is incomplete")
+	}
+	now := runtimeCommandTime(command.At)
+	leaseExpiresAt := now.Add(command.LeaseDuration)
+	var result AgentRuntimeExecutionClaim
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var candidate model.AgentRuntimeStep
+		query := tx.Model(&model.AgentRuntimeStep{}).
+			Select("agent_runtime_steps.*").
+			Joins("JOIN agent_runtime_runs ON agent_runtime_runs.id = agent_runtime_steps.run_id").
+			Joins("JOIN projects ON projects.id = agent_runtime_runs.project_id AND projects.user_id = agent_runtime_runs.user_id").
+			Where("agent_runtime_runs.domain = ? AND projects.status <> ?", "film", model.ProjectStatusArchived).
+			Where(`(
+				(agent_runtime_steps.status = ? AND agent_runtime_runs.status IN ?) OR
+				(agent_runtime_steps.status = ? AND agent_runtime_runs.status = ? AND (agent_runtime_steps.lease_expires_at IS NULL OR agent_runtime_steps.lease_expires_at <= ?))
+			)`, model.AgentStepStatusReady, []model.AgentRuntimeRunStatus{model.AgentRunStatusReady, model.AgentRunStatusRunning},
+				model.AgentStepStatusRunning, model.AgentRunStatusRunning, now).
+			Order("agent_runtime_runs.created_at asc, agent_runtime_steps.position asc, agent_runtime_steps.created_at asc").
+			Limit(1)
+		if r.Dialect() == "postgres" {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		}
+		found := query.Find(&candidate)
+		if found.Error != nil {
+			return found.Error
+		}
+		if found.RowsAffected == 0 {
+			return nil
+		}
+
+		var run model.AgentRuntimeRun
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&run, "id = ?", candidate.RunID).Error; err != nil {
+			return err
+		}
+		var step model.AgentRuntimeStep
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&step, "id = ? AND run_id = ?", candidate.ID, run.ID).Error; err != nil {
+			return err
+		}
+		recovered := step.Status == model.AgentStepStatusRunning
+		if step.Status == model.AgentStepStatusReady {
+			if run.Status != model.AgentRunStatusReady && run.Status != model.AgentRunStatusRunning {
+				return ErrAgentRuntimeStateConflict
+			}
+		} else if step.Status != model.AgentStepStatusRunning || run.Status != model.AgentRunStatusRunning ||
+			(step.LeaseExpiresAt != nil && step.LeaseExpiresAt.After(now)) {
+			return ErrAgentRuntimeStateConflict
+		}
+
+		var attempt model.AgentRuntimeAttempt
+		attemptFound := tx.Where("step_id = ? AND status IN ?", step.ID, []model.AgentRuntimeAttemptStatus{model.AgentAttemptStatusQueued, model.AgentAttemptStatusRunning}).
+			Order("number desc").Limit(1).Find(&attempt)
+		if attemptFound.Error != nil {
+			return attemptFound.Error
+		}
+		if attemptFound.RowsAffected == 0 {
+			attempt = model.AgentRuntimeAttempt{
+				ID: command.AttemptID, RunID: run.ID, StepID: step.ID, Number: step.AttemptSequence + 1,
+				TaskID: command.TaskID, Status: model.AgentAttemptStatusRunning, Executor: command.Executor,
+				RequestJSON: "{}", Revision: 1, StartedAt: &now, CreatedAt: now, UpdatedAt: now,
+			}
+			if err := tx.Create(&attempt).Error; err != nil {
+				return err
+			}
+		} else {
+			if attempt.Status == model.AgentAttemptStatusRunning {
+				recovered = true
+			}
+			updates := map[string]any{
+				"status":     model.AgentAttemptStatusRunning,
+				"executor":   command.Executor,
+				"started_at": gorm.Expr("COALESCE(started_at, ?)", now),
+				"revision":   gorm.Expr("revision + ?", 1),
+				"updated_at": now,
+			}
+			if strings.TrimSpace(attempt.TaskID) == "" {
+				updates["task_id"] = command.TaskID
+			}
+			updated := tx.Model(&model.AgentRuntimeAttempt{}).
+				Where("id = ? AND step_id = ? AND revision = ? AND status IN ?", attempt.ID, step.ID, attempt.Revision, []model.AgentRuntimeAttemptStatus{model.AgentAttemptStatusQueued, model.AgentAttemptStatusRunning}).
+				Updates(updates)
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return ErrAgentRuntimeStateConflict
+			}
+		}
+
+		stepUpdates := map[string]any{
+			"status":           model.AgentStepStatusRunning,
+			"attempt_sequence": max(step.AttemptSequence, attempt.Number),
+			"lease_owner":      command.Owner,
+			"lease_expires_at": leaseExpiresAt,
+			"failure_code":     "",
+			"failure":          "",
+			"completed_at":     nil,
+			"started_at":       gorm.Expr("COALESCE(started_at, ?)", now),
+			"revision":         gorm.Expr("revision + ?", 1),
+			"updated_at":       now,
+		}
+		stepQuery := tx.Model(&model.AgentRuntimeStep{}).Where("id = ? AND run_id = ? AND revision = ? AND status = ?", step.ID, run.ID, step.Revision, step.Status)
+		if step.Status == model.AgentStepStatusRunning {
+			stepQuery = stepQuery.Where("lease_expires_at IS NULL OR lease_expires_at <= ?", now)
+		}
+		stepUpdated := stepQuery.Updates(stepUpdates)
+		if stepUpdated.Error != nil {
+			return stepUpdated.Error
+		}
+		if stepUpdated.RowsAffected != 1 {
+			return ErrAgentRuntimeStateConflict
+		}
+		if !agentruntime.CanTransitionRun(run.Status, model.AgentRunStatusRunning) {
+			return fmt.Errorf("%w: Run %s -> %s", ErrAgentRuntimeInvalidTransition, run.Status, model.AgentRunStatusRunning)
+		}
+		runUpdates := runTransitionUpdates(run, model.AgentRunStatusRunning, step.ID, "", "", now)
+		runUpdates["revision"] = gorm.Expr("revision + ?", 1)
+		runUpdates["event_sequence"] = gorm.Expr("event_sequence + ?", 1)
+		runUpdated := tx.Model(&model.AgentRuntimeRun{}).
+			Where("id = ? AND revision = ? AND status = ?", run.ID, run.Revision, run.Status).
+			Updates(runUpdates)
+		if runUpdated.Error != nil {
+			return runUpdated.Error
+		}
+		if runUpdated.RowsAffected != 1 {
+			return ErrAgentRuntimeStateConflict
+		}
+		if err := tx.First(&attempt, "id = ?", attempt.ID).Error; err != nil {
+			return err
+		}
+		eventType := "attempt.started"
+		if recovered {
+			eventType = "attempt.recovered"
+		}
+		if err := appendAgentRuntimeEvent(tx, run, AgentRuntimeEventInput{
+			ID: command.EventID, EventType: eventType, ActorType: "worker", ActorID: command.Owner,
+			StepID: step.ID, AttemptID: attempt.ID,
+			PayloadJSON: mustRepositoryJSON(map[string]any{"attemptNumber": attempt.Number, "recovered": recovered}),
+		}, run.EventSequence+1, step.ID, string(step.Status), string(model.AgentStepStatusRunning), now); err != nil {
+			return err
+		}
+		if err := tx.First(&result.Run, "id = ?", run.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&result.Step, "id = ?", step.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&result.Attempt, "id = ?", attempt.ID).Error; err != nil {
+			return err
+		}
+		result.Recovered = recovered
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.Run.ID == "" {
+		return nil, nil
+	}
+	return &result, nil
+}
+
+func (r *Repository) PrepareClaimedAgentRuntimeAttempt(command AgentRuntimeAttemptMetadata) (*model.AgentRuntimeAttempt, error) {
+	if strings.TrimSpace(command.Owner) == "" || strings.TrimSpace(command.RunID) == "" || strings.TrimSpace(command.StepID) == "" ||
+		strings.TrimSpace(command.AttemptID) == "" || command.ExpectedAttemptRevision < 1 || strings.TrimSpace(command.Executor) == "" ||
+		strings.TrimSpace(command.InputDigest) == "" || strings.TrimSpace(command.PromptDigest) == "" || strings.TrimSpace(command.RequestJSON) == "" {
+		return nil, errors.New("claimed agent runtime Attempt metadata is incomplete")
+	}
+	now := runtimeCommandTime(command.At)
+	var result model.AgentRuntimeAttempt
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var step model.AgentRuntimeStep
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&step, "id = ? AND run_id = ?", command.StepID, command.RunID).Error; err != nil {
+			return err
+		}
+		if step.Status != model.AgentStepStatusRunning || step.LeaseOwner != command.Owner {
+			return ErrAgentRuntimeLeaseLost
+		}
+		updated := tx.Model(&model.AgentRuntimeAttempt{}).
+			Where("id = ? AND run_id = ? AND step_id = ? AND status = ? AND revision = ?", command.AttemptID, command.RunID, command.StepID, model.AgentAttemptStatusRunning, command.ExpectedAttemptRevision).
+			Updates(map[string]any{
+				"executor": command.Executor, "model_ref": strings.TrimSpace(command.ModelRef),
+				"input_digest": command.InputDigest, "prompt_digest": command.PromptDigest,
+				"request_json": command.RequestJSON, "revision": gorm.Expr("revision + ?", 1), "updated_at": now,
+			})
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return ErrAgentRuntimeStateConflict
+		}
+		return tx.First(&result, "id = ?", command.AttemptID).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (r *Repository) RenewAgentRuntimeExecutionLease(stepID string, attemptID string, owner string, leaseDuration time.Duration) error {
+	if strings.TrimSpace(stepID) == "" || strings.TrimSpace(attemptID) == "" || strings.TrimSpace(owner) == "" || leaseDuration <= 0 {
+		return errors.New("agent runtime lease renewal is incomplete")
+	}
+	now := time.Now().UTC()
+	updated := r.db.Model(&model.AgentRuntimeStep{}).
+		Where("id = ? AND status = ? AND lease_owner = ? AND EXISTS (SELECT 1 FROM agent_runtime_attempts WHERE id = ? AND step_id = agent_runtime_steps.id AND status = ?)",
+			stepID, model.AgentStepStatusRunning, owner, attemptID, model.AgentAttemptStatusRunning).
+		Updates(map[string]any{"lease_expires_at": now.Add(leaseDuration), "updated_at": now})
+	if updated.Error != nil {
+		return updated.Error
+	}
+	if updated.RowsAffected != 1 {
+		return ErrAgentRuntimeLeaseLost
+	}
+	return nil
+}
+
+// CompleteAgentRuntimeExecution commits validated output, immutable Artifact
+// revisions, the terminal Attempt/Step facts, and every newly unblocked Step in
+// one transaction.
+func (r *Repository) CompleteAgentRuntimeExecution(command AgentRuntimeExecutionCompleteCommand) (*AgentRuntimeExecutionCompleteResult, error) {
+	if strings.TrimSpace(command.Owner) == "" || strings.TrimSpace(command.UserID) == "" || strings.TrimSpace(command.RunID) == "" ||
+		strings.TrimSpace(command.StepID) == "" || strings.TrimSpace(command.AttemptID) == "" || command.ExpectedRunRevision < 1 ||
+		command.ExpectedStepRevision < 1 || command.ExpectedAttemptRevision < 1 || strings.TrimSpace(command.ResponseJSON) == "" {
+		return nil, errors.New("agent runtime execution completion is incomplete")
+	}
+	if err := validateAgentRuntimeEventInput(command.Event); err != nil {
+		return nil, err
+	}
+	now := runtimeCommandTime(command.At)
+	result := &AgentRuntimeExecutionCompleteResult{}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var run model.AgentRuntimeRun
+		if err := lockAgentRuntimeRun(tx, command.UserID, command.RunID, &run); err != nil {
+			return err
+		}
+		if run.Revision != command.ExpectedRunRevision || run.Status != model.AgentRunStatusRunning {
+			return ErrAgentRuntimeStateConflict
+		}
+		var step model.AgentRuntimeStep
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&step, "id = ? AND run_id = ?", command.StepID, run.ID).Error; err != nil {
+			return err
+		}
+		if step.Revision != command.ExpectedStepRevision || step.Status != model.AgentStepStatusRunning || step.LeaseOwner != command.Owner {
+			return ErrAgentRuntimeLeaseLost
+		}
+		var attempt model.AgentRuntimeAttempt
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&attempt, "id = ? AND run_id = ? AND step_id = ?", command.AttemptID, run.ID, step.ID).Error; err != nil {
+			return err
+		}
+		if attempt.Revision != command.ExpectedAttemptRevision || attempt.Status != model.AgentAttemptStatusRunning {
+			return ErrAgentRuntimeStateConflict
+		}
+
+		refs := make([]productionArtifactRef, 0, len(command.ArtifactWrites))
+		for index := range command.ArtifactWrites {
+			write := command.ArtifactWrites[index]
+			if write.Artifact.UserID != run.UserID || write.Artifact.ProjectID != run.ProjectID || write.Artifact.Domain != run.Domain ||
+				write.Revision.SourceRunID != run.ID || write.Revision.SourceStepID != step.ID || write.Revision.SourceAttemptID != attempt.ID {
+				return errors.New("agent runtime output Artifact is outside the execution scope")
+			}
+			artifact, revision, err := createProductionArtifactRevisionTx(tx, ProductionArtifactRevisionCreate{
+				UserID: run.UserID, Artifact: &write.Artifact, Revision: &write.Revision,
+				ExpectedSequence: write.ExpectedSequence, At: now,
+			})
+			if err != nil {
+				return err
+			}
+			result.Artifacts = append(result.Artifacts, *artifact)
+			result.ArtifactRevisions = append(result.ArtifactRevisions, *revision)
+			refs = append(refs, productionArtifactRef{
+				ArtifactID: artifact.ID, RevisionID: revision.ID, Type: artifact.ArtifactType,
+				Version: revision.Version, Digest: revision.ContentDigest, Status: string(revision.Status),
+			})
+		}
+		outputRefsJSON := mustRepositoryJSON(refs)
+		attemptUpdated := tx.Model(&model.AgentRuntimeAttempt{}).
+			Where("id = ? AND revision = ? AND status = ?", attempt.ID, attempt.Revision, attempt.Status).
+			Updates(map[string]any{
+				"status": model.AgentAttemptStatusSucceeded, "response_json": command.ResponseJSON,
+				"failure_code": "", "failure": "", "completed_at": now,
+				"revision": gorm.Expr("revision + ?", 1), "updated_at": now,
+			})
+		if attemptUpdated.Error != nil {
+			return attemptUpdated.Error
+		}
+		if attemptUpdated.RowsAffected != 1 {
+			return ErrAgentRuntimeStateConflict
+		}
+		stepUpdated := tx.Model(&model.AgentRuntimeStep{}).
+			Where("id = ? AND revision = ? AND status = ? AND lease_owner = ?", step.ID, step.Revision, step.Status, command.Owner).
+			Updates(map[string]any{
+				"status": model.AgentStepStatusCompleted, "output_artifact_refs_json": outputRefsJSON,
+				"failure_code": "", "failure": "", "completed_at": now,
+				"lease_owner": "", "lease_expires_at": nil,
+				"revision": gorm.Expr("revision + ?", 1), "updated_at": now,
+			})
+		if stepUpdated.Error != nil {
+			return stepUpdated.Error
+		}
+		if stepUpdated.RowsAffected != 1 {
+			return ErrAgentRuntimeLeaseLost
+		}
+
+		var steps []model.AgentRuntimeStep
+		if err := tx.Where("run_id = ?", run.ID).Order("position asc, created_at asc").Find(&steps).Error; err != nil {
+			return err
+		}
+		statusByID := make(map[string]model.AgentRuntimeStepStatus, len(steps))
+		for _, item := range steps {
+			statusByID[item.ID] = item.Status
+		}
+		combinedInputRefs, err := combineProductionArtifactRefs(step.InputArtifactRefsJSON, outputRefsJSON)
+		if err != nil {
+			return err
+		}
+		readyIDs := make([]string, 0)
+		for _, item := range steps {
+			if item.Status != model.AgentStepStatusPlanned {
+				continue
+			}
+			var dependencies []string
+			if err := json.Unmarshal([]byte(item.DependsOnStepIDsJSON), &dependencies); err != nil {
+				return fmt.Errorf("decode Step %s dependencies: %w", item.ID, err)
+			}
+			unblocked := len(dependencies) > 0
+			for _, dependencyID := range dependencies {
+				status := statusByID[dependencyID]
+				if status != model.AgentStepStatusCompleted && status != model.AgentStepStatusSkipped {
+					unblocked = false
+					break
+				}
+			}
+			if !unblocked {
+				continue
+			}
+			updated := tx.Model(&model.AgentRuntimeStep{}).
+				Where("id = ? AND run_id = ? AND revision = ? AND status = ?", item.ID, run.ID, item.Revision, item.Status).
+				Updates(map[string]any{
+					"status": model.AgentStepStatusReady, "input_artifact_refs_json": combinedInputRefs,
+					"revision": gorm.Expr("revision + ?", 1), "updated_at": now,
+				})
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return ErrAgentRuntimeStateConflict
+			}
+			statusByID[item.ID] = model.AgentStepStatusReady
+			readyIDs = append(readyIDs, item.ID)
+		}
+
+		nextRunStatus := model.AgentRunStatusCompleted
+		currentStepID := step.ID
+		unfinished := false
+		for _, item := range steps {
+			status := statusByID[item.ID]
+			if status == model.AgentStepStatusRunning {
+				nextRunStatus = model.AgentRunStatusRunning
+				currentStepID = item.ID
+				unfinished = true
+				break
+			}
+			if status == model.AgentStepStatusReady && !unfinished {
+				nextRunStatus = model.AgentRunStatusReady
+				currentStepID = item.ID
+				unfinished = true
+			}
+			if status == model.AgentStepStatusPlanned {
+				unfinished = true
+			}
+		}
+		if unfinished && nextRunStatus == model.AgentRunStatusCompleted {
+			return errors.New("agent runtime Step dependency graph is blocked")
+		}
+		if !agentruntime.CanTransitionRun(run.Status, nextRunStatus) {
+			return fmt.Errorf("%w: Run %s -> %s", ErrAgentRuntimeInvalidTransition, run.Status, nextRunStatus)
+		}
+		runUpdates := runTransitionUpdates(run, nextRunStatus, currentStepID, "", "", now)
+		runUpdates["revision"] = gorm.Expr("revision + ?", 1)
+		runUpdates["event_sequence"] = gorm.Expr("event_sequence + ?", 1)
+		runUpdated := tx.Model(&model.AgentRuntimeRun{}).
+			Where("id = ? AND revision = ? AND status = ?", run.ID, run.Revision, run.Status).
+			Updates(runUpdates)
+		if runUpdated.Error != nil {
+			return runUpdated.Error
+		}
+		if runUpdated.RowsAffected != 1 {
+			return ErrAgentRuntimeStateConflict
+		}
+		event := command.Event
+		event.StepID = step.ID
+		event.AttemptID = attempt.ID
+		if strings.TrimSpace(event.PayloadJSON) == "" {
+			event.PayloadJSON = mustRepositoryJSON(map[string]any{"outputArtifactRefs": refs, "readyStepIds": readyIDs})
+		}
+		if err := appendAgentRuntimeEvent(tx, run, event, run.EventSequence+1, step.ID, string(model.AgentStepStatusRunning), string(model.AgentStepStatusCompleted), now); err != nil {
+			return err
+		}
+		if err := tx.First(&result.Run, "id = ?", run.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&result.Step, "id = ?", step.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&result.Attempt, "id = ?", attempt.ID).Error; err != nil {
+			return err
+		}
+		if len(readyIDs) > 0 {
+			if err := tx.Where("id IN ?", readyIDs).Order("position asc, created_at asc").Find(&result.ReadySteps).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *Repository) FailAgentRuntimeExecution(command AgentRuntimeExecutionFailCommand) (*AgentRuntimeExecutionClaim, error) {
+	if strings.TrimSpace(command.Owner) == "" || strings.TrimSpace(command.UserID) == "" || strings.TrimSpace(command.RunID) == "" ||
+		strings.TrimSpace(command.StepID) == "" || strings.TrimSpace(command.AttemptID) == "" || command.ExpectedRunRevision < 1 ||
+		command.ExpectedStepRevision < 1 || command.ExpectedAttemptRevision < 1 || strings.TrimSpace(command.FailureCode) == "" {
+		return nil, errors.New("agent runtime execution failure is incomplete")
+	}
+	if err := validateAgentRuntimeEventInput(command.Event); err != nil {
+		return nil, err
+	}
+	now := runtimeCommandTime(command.At)
+	result := &AgentRuntimeExecutionClaim{}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var run model.AgentRuntimeRun
+		if err := lockAgentRuntimeRun(tx, command.UserID, command.RunID, &run); err != nil {
+			return err
+		}
+		if run.Revision != command.ExpectedRunRevision || run.Status != model.AgentRunStatusRunning {
+			return ErrAgentRuntimeStateConflict
+		}
+		var step model.AgentRuntimeStep
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&step, "id = ? AND run_id = ?", command.StepID, run.ID).Error; err != nil {
+			return err
+		}
+		if step.Revision != command.ExpectedStepRevision || step.Status != model.AgentStepStatusRunning || step.LeaseOwner != command.Owner {
+			return ErrAgentRuntimeLeaseLost
+		}
+		var attempt model.AgentRuntimeAttempt
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&attempt, "id = ? AND run_id = ? AND step_id = ?", command.AttemptID, run.ID, step.ID).Error; err != nil {
+			return err
+		}
+		if attempt.Revision != command.ExpectedAttemptRevision || attempt.Status != model.AgentAttemptStatusRunning {
+			return ErrAgentRuntimeStateConflict
+		}
+		attemptUpdated := tx.Model(&model.AgentRuntimeAttempt{}).
+			Where("id = ? AND revision = ? AND status = ?", attempt.ID, attempt.Revision, attempt.Status).
+			Updates(map[string]any{
+				"status": model.AgentAttemptStatusFailed, "failure_code": command.FailureCode,
+				"failure": strings.TrimSpace(command.Failure), "completed_at": now,
+				"revision": gorm.Expr("revision + ?", 1), "updated_at": now,
+			})
+		if attemptUpdated.Error != nil {
+			return attemptUpdated.Error
+		}
+		if attemptUpdated.RowsAffected != 1 {
+			return ErrAgentRuntimeStateConflict
+		}
+		stepUpdated := tx.Model(&model.AgentRuntimeStep{}).
+			Where("id = ? AND revision = ? AND status = ? AND lease_owner = ?", step.ID, step.Revision, step.Status, command.Owner).
+			Updates(map[string]any{
+				"status": model.AgentStepStatusFailed, "failure_code": command.FailureCode, "failure": strings.TrimSpace(command.Failure),
+				"completed_at": now, "lease_owner": "", "lease_expires_at": nil,
+				"revision": gorm.Expr("revision + ?", 1), "updated_at": now,
+			})
+		if stepUpdated.Error != nil {
+			return stepUpdated.Error
+		}
+		if stepUpdated.RowsAffected != 1 {
+			return ErrAgentRuntimeLeaseLost
+		}
+		runUpdates := runTransitionUpdates(run, model.AgentRunStatusFailed, step.ID, command.FailureCode, command.Failure, now)
+		runUpdates["revision"] = gorm.Expr("revision + ?", 1)
+		runUpdates["event_sequence"] = gorm.Expr("event_sequence + ?", 1)
+		runUpdated := tx.Model(&model.AgentRuntimeRun{}).
+			Where("id = ? AND revision = ? AND status = ?", run.ID, run.Revision, run.Status).
+			Updates(runUpdates)
+		if runUpdated.Error != nil {
+			return runUpdated.Error
+		}
+		if runUpdated.RowsAffected != 1 {
+			return ErrAgentRuntimeStateConflict
+		}
+		event := command.Event
+		event.StepID = step.ID
+		event.AttemptID = attempt.ID
+		if err := appendAgentRuntimeEvent(tx, run, event, run.EventSequence+1, step.ID, string(model.AgentStepStatusRunning), string(model.AgentStepStatusFailed), now); err != nil {
+			return err
+		}
+		if err := tx.First(&result.Run, "id = ?", run.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&result.Step, "id = ?", step.ID).Error; err != nil {
+			return err
+		}
+		return tx.First(&result.Attempt, "id = ?", attempt.ID).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // TransitionAgentRuntimeRun applies a fenced state change and its audit event
@@ -596,70 +1191,89 @@ func (r *Repository) CreateProductionArtifactRevision(command ProductionArtifact
 	if err := validateProductionArtifactRevisionCreate(command); err != nil {
 		return nil, nil, err
 	}
-	now := runtimeCommandTime(command.At)
 	var resultArtifact model.ProductionArtifact
 	var resultRevision model.ProductionArtifactRevision
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		artifactInput := *command.Artifact
-		revision := *command.Revision
-		var existing model.ProductionArtifact
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", artifactInput.ID).Error
-		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			if command.ExpectedSequence != 0 {
-				return ErrProductionArtifactConflict
-			}
-			revision.ArtifactID = artifactInput.ID
-			revision.Version = 1
-			revision.ParentRevisionID = ""
-			revision.CreatedAt = now
-			artifactInput.CurrentRevisionID = revision.ID
-			artifactInput.RevisionSequence = 1
-			artifactInput.CreatedAt = now
-			artifactInput.UpdatedAt = now
-			if err := tx.Create(&artifactInput).Error; err != nil {
-				return err
-			}
-			if err := tx.Create(&revision).Error; err != nil {
-				return err
-			}
-		case err != nil:
-			return err
-		default:
-			if existing.UserID != command.UserID || existing.ProjectID != artifactInput.ProjectID || existing.Domain != artifactInput.Domain ||
-				existing.ArtifactType != artifactInput.ArtifactType || existing.LogicalKey != artifactInput.LogicalKey {
-				return gorm.ErrRecordNotFound
-			}
-			if existing.RevisionSequence != command.ExpectedSequence || existing.CurrentRevisionID == "" {
-				return ErrProductionArtifactConflict
-			}
-			revision.ArtifactID = existing.ID
-			revision.Version = existing.RevisionSequence + 1
-			revision.ParentRevisionID = existing.CurrentRevisionID
-			revision.CreatedAt = now
-			updated := tx.Model(&model.ProductionArtifact{}).
-				Where("id = ? AND user_id = ? AND revision_sequence = ? AND current_revision_id = ?", existing.ID, command.UserID, existing.RevisionSequence, existing.CurrentRevisionID).
-				Updates(map[string]any{
-					"current_revision_id": revision.ID,
-					"revision_sequence":   gorm.Expr("revision_sequence + ?", 1),
-					"updated_at":          now,
-				})
-			if updated.Error != nil {
-				return updated.Error
-			}
-			if updated.RowsAffected != 1 {
-				return ErrProductionArtifactConflict
-			}
-			if err := tx.Create(&revision).Error; err != nil {
-				return err
-			}
-		}
-		if err := tx.First(&resultArtifact, "id = ? AND user_id = ?", artifactInput.ID, command.UserID).Error; err != nil {
+		artifact, revision, err := createProductionArtifactRevisionTx(tx, command)
+		if err != nil {
 			return err
 		}
-		return tx.First(&resultRevision, "id = ? AND artifact_id = ?", revision.ID, artifactInput.ID).Error
+		resultArtifact = *artifact
+		resultRevision = *revision
+		return nil
 	})
 	if err != nil {
+		return nil, nil, err
+	}
+	return &resultArtifact, &resultRevision, nil
+}
+
+func createProductionArtifactRevisionTx(tx *gorm.DB, command ProductionArtifactRevisionCreate) (*model.ProductionArtifact, *model.ProductionArtifactRevision, error) {
+	if err := validateProductionArtifactRevisionCreate(command); err != nil {
+		return nil, nil, err
+	}
+	now := runtimeCommandTime(command.At)
+	artifactInput := *command.Artifact
+	revision := *command.Revision
+	var existing model.ProductionArtifact
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", artifactInput.ID).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		if command.ExpectedSequence != 0 {
+			return nil, nil, ErrProductionArtifactConflict
+		}
+		revision.ArtifactID = artifactInput.ID
+		revision.Version = 1
+		revision.ParentRevisionID = ""
+		revision.CreatedAt = now
+		artifactInput.CurrentRevisionID = revision.ID
+		artifactInput.RevisionSequence = 1
+		artifactInput.CreatedAt = now
+		artifactInput.UpdatedAt = now
+		if err := tx.Create(&artifactInput).Error; err != nil {
+			return nil, nil, err
+		}
+		if err := tx.Create(&revision).Error; err != nil {
+			return nil, nil, err
+		}
+	case err != nil:
+		return nil, nil, err
+	default:
+		if existing.UserID != command.UserID || existing.ProjectID != artifactInput.ProjectID || existing.Domain != artifactInput.Domain ||
+			existing.ArtifactType != artifactInput.ArtifactType || existing.LogicalKey != artifactInput.LogicalKey {
+			return nil, nil, gorm.ErrRecordNotFound
+		}
+		if existing.RevisionSequence != command.ExpectedSequence || existing.CurrentRevisionID == "" {
+			return nil, nil, ErrProductionArtifactConflict
+		}
+		revision.ArtifactID = existing.ID
+		revision.Version = existing.RevisionSequence + 1
+		revision.ParentRevisionID = existing.CurrentRevisionID
+		revision.CreatedAt = now
+		updated := tx.Model(&model.ProductionArtifact{}).
+			Where("id = ? AND user_id = ? AND revision_sequence = ? AND current_revision_id = ?", existing.ID, command.UserID, existing.RevisionSequence, existing.CurrentRevisionID).
+			Updates(map[string]any{
+				"current_revision_id": revision.ID,
+				"revision_sequence":   gorm.Expr("revision_sequence + ?", 1),
+				"updated_at":          now,
+			})
+		if updated.Error != nil {
+			return nil, nil, updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return nil, nil, ErrProductionArtifactConflict
+		}
+		if err := tx.Create(&revision).Error; err != nil {
+			return nil, nil, err
+		}
+		artifactInput = existing
+	}
+	var resultArtifact model.ProductionArtifact
+	var resultRevision model.ProductionArtifactRevision
+	if err := tx.First(&resultArtifact, "id = ? AND user_id = ?", artifactInput.ID, command.UserID).Error; err != nil {
+		return nil, nil, err
+	}
+	if err := tx.First(&resultRevision, "id = ? AND artifact_id = ?", revision.ID, artifactInput.ID).Error; err != nil {
 		return nil, nil, err
 	}
 	return &resultArtifact, &resultRevision, nil
@@ -668,6 +1282,14 @@ func (r *Repository) CreateProductionArtifactRevision(command ProductionArtifact
 func (r *Repository) ProductionArtifactForUser(userID string, artifactID string) (*model.ProductionArtifact, error) {
 	var artifact model.ProductionArtifact
 	if err := r.db.First(&artifact, "id = ? AND user_id = ?", artifactID, userID).Error; err != nil {
+		return nil, err
+	}
+	return &artifact, nil
+}
+
+func (r *Repository) ProductionArtifactByLogicalKey(userID string, projectID string, domain string, logicalKey string) (*model.ProductionArtifact, error) {
+	var artifact model.ProductionArtifact
+	if err := r.db.First(&artifact, "user_id = ? AND project_id = ? AND domain = ? AND logical_key = ?", userID, projectID, domain, logicalKey).Error; err != nil {
 		return nil, err
 	}
 	return &artifact, nil
@@ -920,6 +1542,49 @@ func (r *Repository) ResolveAgentRuntimeHumanDecision(command AgentRuntimeHumanR
 		stepResult = &resultStep
 	}
 	return &resultRun, stepResult, &resultDecision, nil
+}
+
+type productionArtifactRef struct {
+	ArtifactID string `json:"artifactId"`
+	RevisionID string `json:"revisionId"`
+	Type       string `json:"type"`
+	Version    int    `json:"version"`
+	Digest     string `json:"digest"`
+	Status     string `json:"status"`
+}
+
+func combineProductionArtifactRefs(leftJSON string, rightJSON string) (string, error) {
+	combined := make([]productionArtifactRef, 0)
+	seen := make(map[string]struct{})
+	for _, raw := range []string{leftJSON, rightJSON} {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		var refs []productionArtifactRef
+		if err := json.Unmarshal([]byte(raw), &refs); err != nil {
+			return "", err
+		}
+		for _, ref := range refs {
+			if strings.TrimSpace(ref.RevisionID) == "" {
+				return "", errors.New("production Artifact reference has no revision ID")
+			}
+			if _, duplicate := seen[ref.RevisionID]; duplicate {
+				continue
+			}
+			seen[ref.RevisionID] = struct{}{}
+			combined = append(combined, ref)
+		}
+	}
+	return mustRepositoryJSON(combined), nil
+}
+
+func mustRepositoryJSON(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
 }
 
 func lockAgentRuntimeRun(tx *gorm.DB, userID string, runID string, run *model.AgentRuntimeRun) error {

@@ -63,22 +63,34 @@ Recorded on 2026-08-21 before convergence changes:
 
 ## Current Convergence Verification
 
-Recorded on 2026-08-21 at `ce86bb7` plus the uncommitted Film Runtime control
-plane:
+Recorded on 2026-08-21 on `codex/converged-runtime` after the Film Executor and
+durable Handoff slice:
 
-- `go test ./... -count=1`: pass for every backend package.
 - `go vet ./...`: pass.
+- AgentRuntime, database, repository, handler, server, and all Film service
+  tests: pass.
+- The service package passes with the five previously classified upstream
+  environment-sensitive tests skipped. An unfiltered run currently reproduces
+  those same five baseline failures; no new failure is present.
 - Film registry startup validation: exactly 9 Agents, 17 Skills, 15 intent
   routes, 11 handoff routes, and 46 canonical Artifact types.
 - Film Run service tests: all 15 intent routes compile to owned Agent/Skill
   Steps; create, idempotency, locked inputs, human pause/resume, append-only
   retry, archived-history reads, secret rejection, and domain isolation pass.
 - Film HTTP contract: authenticated catalog, create, replay, list, detail, and
-  decision resolution pass; unauthorized, invalid-limit, missing-idempotency,
-  and oversized-body responses are enforced.
+  decision resolution and immutable Artifact lock pass; unauthorized,
+  invalid-limit, missing-idempotency, stale revision, and oversized-body
+  responses are enforced.
+- Provider-backed integration: LogicalModel -> ChannelModel -> durable Task ->
+  OpenAI-compatible HTTP -> strict Artifact output -> `REVIEW` revision is
+  traced through RouteAttempt, API audit, Film Attempt, and Event evidence.
+- Handoff integration: a locked script schedules idempotent HR-03; a locked
+  storyboard schedules HR-04 and HR-05 in parallel. Trigger recovery, retries,
+  terminal failure, OR/AND groups, root-lineage isolation, and exclusion of
+  HR-09/10/11 from automatic Agent execution pass.
 
-The five failures above remain historical baseline notes; they do not reproduce
-on the current mainline and are not current blockers.
+The five failures above remain upstream baseline issues and currently reproduce
+in this network/runtime environment. They do not touch the Film runtime paths.
 
 See `film-runtime-control-plane.md` for the implemented API and the exact
 boundary between durable control-plane evidence and real Agent execution.

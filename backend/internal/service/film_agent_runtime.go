@@ -27,6 +27,7 @@ type CreateFilmAgentRunRequest struct {
 	Objective                string         `json:"objective"`
 	IntentRouteID            string         `json:"intentRouteId"`
 	AgentID                  string         `json:"agentId"`
+	LogicalModelID           string         `json:"logicalModelId"`
 	Input                    map[string]any `json:"input"`
 	InputArtifactRevisionIDs []string       `json:"inputArtifactRevisionIds"`
 	ReviewBeforeExecution    bool           `json:"reviewBeforeExecution"`
@@ -44,6 +45,12 @@ type RetryFilmAgentStepRequest struct {
 	ExpectedRunRevision  int64  `json:"expectedRunRevision"`
 	ExpectedStepRevision int64  `json:"expectedStepRevision"`
 	Reason               string `json:"reason"`
+}
+
+type LockFilmAgentArtifactRequest struct {
+	ExpectedRunRevision      int64  `json:"expectedRunRevision"`
+	ExpectedArtifactSequence int    `json:"expectedArtifactSequence"`
+	ExpectedRevisionID       string `json:"expectedRevisionId"`
 }
 
 type FilmProductionArtifactRef struct {
@@ -86,11 +93,17 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
+	logicalModelID := strings.TrimSpace(request.LogicalModelID)
+	if logicalModelID != "" {
+		if _, err := s.ResolveLogicalModel(logicalModelID, ModelRequestIntent{Capability: "text", Inputs: map[string]int{}, Options: map[string]any{}}); err != nil {
+			return FilmAgentRunCreateResult{}, err
+		}
+	}
 	route, selectedAgentID, routeReason, routeConfidence, err := s.selectFilmIntentRoute(objective, request.IntentRouteID, request.AgentID)
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
-	requestDigest, err := digestFilmAgentRequest(project.ID, objective, route.ID, selectedAgentID, normalizedInput, request.InputArtifactRevisionIDs, request.ReviewBeforeExecution)
+	requestDigest, err := digestFilmAgentRequest(project.ID, objective, route.ID, selectedAgentID, logicalModelID, normalizedInput, request.InputArtifactRevisionIDs, request.ReviewBeforeExecution)
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
@@ -132,7 +145,7 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 	}
 	runInputJSON, err := json.Marshal(map[string]any{
 		"schemaVersion": 1, "requestDigest": requestDigest, "input": normalizedInput,
-		"inputArtifactRefs": inputRefs, "reviewBeforeExecution": request.ReviewBeforeExecution,
+		"inputArtifactRefs": inputRefs, "reviewBeforeExecution": request.ReviewBeforeExecution, "logicalModelId": logicalModelID,
 	})
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
@@ -140,12 +153,13 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 	run := &model.AgentRuntimeRun{
 		ID: runID, UserID: userID, ProjectID: project.ID, CanvasID: strings.TrimSpace(request.CanvasID), Domain: "film",
 		RegistryID: s.filmAgentRegistry.ID, RegistryVersion: s.filmAgentRegistry.Version, RegistryDigest: s.filmAgentRegistry.SourceDigest,
-		IntentRouteID: route.ID, Status: runStatus, Objective: objective, InputJSON: string(runInputJSON),
+		RouteKind: "intent", IntentRouteID: route.ID, RootRunID: runID,
+		Status: runStatus, Objective: objective, InputJSON: string(runInputJSON),
 		CurrentStepID: steps[0].ID, IdempotencyKey: idempotencyKey, Revision: 1, EventSequence: 2,
 		CreatedAt: createdAt, UpdatedAt: createdAt,
 	}
 	routing := &model.AgentRoutingDecision{
-		ID: newID(), RunID: run.ID, IntentRouteID: route.ID, SelectedAgentID: selectedAgentID,
+		ID: newID(), RunID: run.ID, RouteKind: "intent", RouteID: route.ID, IntentRouteID: route.ID, SelectedAgentID: selectedAgentID,
 		SelectedSkillIDsJSON: mustFilmJSON(route.SkillIDs), InputArtifactRefsJSON: string(inputRefsJSON), AlternativesJSON: "[]",
 		Reason: routeReason, Confidence: routeConfidence, DecidedByType: "runtime", DecidedByID: "film-router-v1", CreatedAt: createdAt,
 	}
@@ -179,6 +193,43 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 	}
 	detail, err := s.repo.AgentRuntimeDetailForUser(userID, run.ID)
 	return FilmAgentRunCreateResult{Detail: detail}, err
+}
+
+func (s *Service) LockFilmAgentArtifact(userID string, projectID string, runID string, artifactID string, request LockFilmAgentArtifactRequest) (*repository.ProductionArtifactLockResult, error) {
+	if _, err := s.requireMutableFilmProject(userID, projectID); err != nil {
+		return nil, err
+	}
+	detail, err := s.FilmAgentRunDetail(userID, projectID, runID)
+	if err != nil {
+		return nil, err
+	}
+	expectedRevisionID := strings.TrimSpace(request.ExpectedRevisionID)
+	if request.ExpectedRunRevision < 1 || request.ExpectedArtifactSequence < 1 || expectedRevisionID == "" {
+		return nil, BadAuthRequest("锁定 Artifact 必须携带当前 Run revision、Artifact sequence 和 revision ID")
+	}
+	artifact, err := s.repo.ProductionArtifactForUser(userID, strings.TrimSpace(artifactID))
+	if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && (artifact.ProjectID != projectID || artifact.Domain != "film")) {
+		return nil, NotFound("Film Artifact 不存在")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := s.filmAgentRegistry.CanonicalArtifactType(artifact.ArtifactType); !ok {
+		return nil, BadAuthRequest("Artifact 类型不属于 Film AgentTeam")
+	}
+	result, err := s.repo.LockProductionArtifactForHandoff(repository.ProductionArtifactLockCommand{
+		UserID: userID, ProjectID: projectID, Domain: "film", RunID: detail.Run.ID, ArtifactID: strings.TrimSpace(artifactID),
+		ExpectedRunRevision: request.ExpectedRunRevision, ExpectedArtifactSequence: request.ExpectedArtifactSequence,
+		ExpectedRevisionID: expectedRevisionID, LockedRevisionID: newID(), TriggerID: newID(),
+		Event: repository.AgentRuntimeEventInput{
+			ID: newID(), EventType: "artifact.locked", ActorType: "user", ActorID: userID,
+		},
+		At: time.Now().UTC(),
+	})
+	if err != nil {
+		return nil, mapAgentRuntimeRepositoryError(err)
+	}
+	return result, nil
 }
 
 func (s *Service) ListFilmAgentRuns(userID string, projectID string, limit int) ([]model.AgentRuntimeRun, error) {
@@ -554,10 +605,10 @@ func buildFilmProjectRequirementsArtifact(userID string, project model.Project, 
 	return artifact, revision, ref, nil
 }
 
-func digestFilmAgentRequest(projectID string, objective string, routeID string, agentID string, input map[string]any, revisionIDs []string, review bool) (string, error) {
+func digestFilmAgentRequest(projectID string, objective string, routeID string, agentID string, logicalModelID string, input map[string]any, revisionIDs []string, review bool) (string, error) {
 	encoded, err := json.Marshal(map[string]any{
 		"projectId": projectID, "objective": objective, "intentRouteId": routeID, "agentId": agentID,
-		"input": input, "inputArtifactRevisionIds": revisionIDs, "reviewBeforeExecution": review,
+		"logicalModelId": logicalModelID, "input": input, "inputArtifactRevisionIds": revisionIDs, "reviewBeforeExecution": review,
 	})
 	if err != nil {
 		return "", err

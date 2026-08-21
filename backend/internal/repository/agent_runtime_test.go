@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -372,12 +373,191 @@ func TestHumanDecisionPauseAndResumeAreAtomicAndReplaySafe(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimeExecutionClaimRecoversTheSameAttemptAndFencesTheOldWorker(t *testing.T) {
+	db := openAgentRuntimeTestDB(t, filepath.Join(t.TempDir(), "agent-runtime.db"))
+	repo := New(db)
+	now := time.Now().UTC()
+	bundle := agentRuntimeTestBundle("run-claim", "claim-request", now)
+	createAgentRuntimeTestProject(t, db, bundle.Run.ProjectID, bundle.Run.UserID)
+	if err := repo.CreateAgentRuntimeBundle(bundle); err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+
+	first, err := repo.ClaimNextAgentRuntimeExecution(AgentRuntimeExecutionClaimCommand{
+		Owner: "worker-a", LeaseDuration: time.Minute, AttemptID: "attempt-a", TaskID: "task-a",
+		EventID: "event-claim-a", Executor: "executor-a", At: now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("first execution claim: %v", err)
+	}
+	if first == nil || first.Recovered || first.Attempt.ID != "attempt-a" || first.Attempt.TaskID != "task-a" ||
+		first.Attempt.Number != 1 || first.Step.Status != model.AgentStepStatusRunning || first.Run.Status != model.AgentRunStatusRunning {
+		t.Fatalf("first execution claim is invalid: %#v", first)
+	}
+
+	notExpired, err := repo.ClaimNextAgentRuntimeExecution(AgentRuntimeExecutionClaimCommand{
+		Owner: "worker-b", LeaseDuration: time.Minute, AttemptID: "attempt-b", TaskID: "task-b",
+		EventID: "event-claim-b-early", Executor: "executor-b", At: now.Add(30 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("claim while lease is active: %v", err)
+	}
+	if notExpired != nil {
+		t.Fatalf("active lease was stolen: %#v", notExpired)
+	}
+
+	recovered, err := repo.ClaimNextAgentRuntimeExecution(AgentRuntimeExecutionClaimCommand{
+		Owner: "worker-b", LeaseDuration: time.Minute, AttemptID: "attempt-b", TaskID: "task-b",
+		EventID: "event-claim-b-recovered", Executor: "executor-b", At: now.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("recover expired execution claim: %v", err)
+	}
+	if recovered == nil || !recovered.Recovered || recovered.Attempt.ID != first.Attempt.ID ||
+		recovered.Attempt.TaskID != first.Attempt.TaskID || recovered.Attempt.Number != first.Attempt.Number {
+		t.Fatalf("expired claim did not resume the original paid execution identity: first=%#v recovered=%#v", first, recovered)
+	}
+	if recovered.Step.Revision <= first.Step.Revision || recovered.Attempt.Revision <= first.Attempt.Revision ||
+		recovered.Run.Revision <= first.Run.Revision {
+		t.Fatalf("recovery did not advance fencing revisions: first=%#v recovered=%#v", first, recovered)
+	}
+	if err := repo.RenewAgentRuntimeExecutionLease(first.Step.ID, first.Attempt.ID, "worker-a", time.Minute); !errors.Is(err, ErrAgentRuntimeLeaseLost) {
+		t.Fatalf("old worker lease renewal error = %v, want ErrAgentRuntimeLeaseLost", err)
+	}
+	if _, err := repo.CompleteAgentRuntimeExecution(AgentRuntimeExecutionCompleteCommand{
+		Owner: "worker-a", UserID: first.Run.UserID, RunID: first.Run.ID, StepID: first.Step.ID, AttemptID: first.Attempt.ID,
+		ExpectedRunRevision: first.Run.Revision, ExpectedStepRevision: first.Step.Revision, ExpectedAttemptRevision: first.Attempt.Revision,
+		ResponseJSON: `{"schemaVersion":1,"summary":"stale","artifacts":[]}`,
+		Event:        AgentRuntimeEventInput{ID: "event-stale-completion", EventType: "attempt.succeeded", ActorType: "executor", ActorID: "executor-a"},
+		At:           now.Add(3 * time.Minute),
+	}); !errors.Is(err, ErrAgentRuntimeStateConflict) && !errors.Is(err, ErrAgentRuntimeLeaseLost) {
+		t.Fatalf("old worker completion error = %v, want a fencing conflict", err)
+	}
+
+	detail, err := repo.AgentRuntimeDetailForUser(bundle.Run.UserID, bundle.Run.ID)
+	if err != nil {
+		t.Fatalf("load recovered detail: %v", err)
+	}
+	if len(detail.Attempts) != 1 || detail.Attempts[0].TaskID != "task-a" || detail.Attempts[0].Status != model.AgentAttemptStatusRunning ||
+		len(detail.Events) != 3 || detail.Events[2].EventType != "attempt.recovered" {
+		t.Fatalf("recovered execution history is invalid: %#v", detail)
+	}
+}
+
+func TestCompleteAgentRuntimeExecutionCommitsArtifactsAndUnblocksNextStepAtomically(t *testing.T) {
+	db := openAgentRuntimeTestDB(t, filepath.Join(t.TempDir(), "agent-runtime.db"))
+	repo := New(db)
+	now := time.Now().UTC()
+	bundle := agentRuntimeTestBundle("run-complete", "complete-request", now)
+	firstStep := bundle.Steps[0]
+	secondStep := firstStep
+	secondStep.ID = "run-complete-step-2"
+	secondStep.StepKey = "intent:IR-03:skill:2"
+	secondStep.Position = 1
+	secondStep.SkillIDsJSON = `["story_structure"]`
+	secondStep.Status = model.AgentStepStatusPlanned
+	secondStep.DependsOnStepIDsJSON = `["` + firstStep.ID + `"]`
+	secondStep.CreatedAt = now.Add(time.Millisecond)
+	secondStep.UpdatedAt = secondStep.CreatedAt
+	bundle.Steps = append(bundle.Steps, secondStep)
+	createAgentRuntimeTestProject(t, db, bundle.Run.ProjectID, bundle.Run.UserID)
+	if err := repo.CreateAgentRuntimeBundle(bundle); err != nil {
+		t.Fatalf("create two-step bundle: %v", err)
+	}
+	claim, err := repo.ClaimNextAgentRuntimeExecution(AgentRuntimeExecutionClaimCommand{
+		Owner: "worker-a", LeaseDuration: time.Minute, AttemptID: "attempt-complete", TaskID: "task-complete",
+		EventID: "event-complete-claim", Executor: "executor-a", At: now.Add(time.Second),
+	})
+	if err != nil || claim == nil {
+		t.Fatalf("claim first Step: claim=%#v error=%v", claim, err)
+	}
+	write := agentRuntimeExecutionArtifactWrite(*claim, "script")
+	completed, err := repo.CompleteAgentRuntimeExecution(AgentRuntimeExecutionCompleteCommand{
+		Owner: "worker-a", UserID: claim.Run.UserID, RunID: claim.Run.ID, StepID: claim.Step.ID, AttemptID: claim.Attempt.ID,
+		ExpectedRunRevision: claim.Run.Revision, ExpectedStepRevision: claim.Step.Revision, ExpectedAttemptRevision: claim.Attempt.Revision,
+		ResponseJSON:   `{"schemaVersion":1,"summary":"done","artifacts":[{"type":"script","contentText":"scene"}]}`,
+		ArtifactWrites: []ProductionArtifactWrite{write},
+		Event:          AgentRuntimeEventInput{ID: "event-complete-success", EventType: "attempt.succeeded", ActorType: "executor", ActorID: "executor-a"},
+		At:             now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("complete first Step: %v", err)
+	}
+	if completed.Run.Status != model.AgentRunStatusReady || completed.Run.CurrentStepID != secondStep.ID ||
+		completed.Step.Status != model.AgentStepStatusCompleted || completed.Attempt.Status != model.AgentAttemptStatusSucceeded ||
+		len(completed.ReadySteps) != 1 || completed.ReadySteps[0].ID != secondStep.ID ||
+		len(completed.Artifacts) != 1 || len(completed.ArtifactRevisions) != 1 {
+		t.Fatalf("atomic completion result is incoherent: %#v", completed)
+	}
+	if completed.ArtifactRevisions[0].Status != model.ProductionArtifactStatusReview ||
+		completed.ArtifactRevisions[0].SourceAttemptID != claim.Attempt.ID {
+		t.Fatalf("Agent output was not persisted as review evidence: %#v", completed.ArtifactRevisions[0])
+	}
+	var nextRefs []productionArtifactRef
+	if err := json.Unmarshal([]byte(completed.ReadySteps[0].InputArtifactRefsJSON), &nextRefs); err != nil {
+		t.Fatalf("decode next Step inputs: %v", err)
+	}
+	if len(nextRefs) != 1 || nextRefs[0].RevisionID != completed.ArtifactRevisions[0].ID {
+		t.Fatalf("next Step did not receive the committed Artifact reference: %#v", nextRefs)
+	}
+	detail, err := repo.AgentRuntimeDetailForUser(bundle.Run.UserID, bundle.Run.ID)
+	if err != nil {
+		t.Fatalf("load completed detail: %v", err)
+	}
+	if len(detail.Events) != 3 || detail.Events[2].EventType != "attempt.succeeded" || len(detail.ArtifactRevisions) != 1 {
+		t.Fatalf("completion evidence is incomplete: %#v", detail)
+	}
+}
+
+func TestCompleteAgentRuntimeExecutionRollsBackEveryFactWhenAnArtifactWriteFails(t *testing.T) {
+	db := openAgentRuntimeTestDB(t, filepath.Join(t.TempDir(), "agent-runtime.db"))
+	repo := New(db)
+	now := time.Now().UTC()
+	bundle := agentRuntimeTestBundle("run-rollback", "rollback-request", now)
+	createAgentRuntimeTestProject(t, db, bundle.Run.ProjectID, bundle.Run.UserID)
+	if err := repo.CreateAgentRuntimeBundle(bundle); err != nil {
+		t.Fatalf("create bundle: %v", err)
+	}
+	claim, err := repo.ClaimNextAgentRuntimeExecution(AgentRuntimeExecutionClaimCommand{
+		Owner: "worker-a", LeaseDuration: time.Minute, AttemptID: "attempt-rollback", TaskID: "task-rollback",
+		EventID: "event-rollback-claim", Executor: "executor-a", At: now.Add(time.Second),
+	})
+	if err != nil || claim == nil {
+		t.Fatalf("claim Step: claim=%#v error=%v", claim, err)
+	}
+	valid := agentRuntimeExecutionArtifactWrite(*claim, "script")
+	invalid := agentRuntimeExecutionArtifactWrite(*claim, "storyboard")
+	invalid.Revision.ContentJSON = ""
+	invalid.Revision.ContentText = ""
+	if _, err := repo.CompleteAgentRuntimeExecution(AgentRuntimeExecutionCompleteCommand{
+		Owner: "worker-a", UserID: claim.Run.UserID, RunID: claim.Run.ID, StepID: claim.Step.ID, AttemptID: claim.Attempt.ID,
+		ExpectedRunRevision: claim.Run.Revision, ExpectedStepRevision: claim.Step.Revision, ExpectedAttemptRevision: claim.Attempt.Revision,
+		ResponseJSON:   `{"schemaVersion":1,"summary":"invalid","artifacts":[]}`,
+		ArtifactWrites: []ProductionArtifactWrite{valid, invalid},
+		Event:          AgentRuntimeEventInput{ID: "event-rollback-complete", EventType: "attempt.succeeded", ActorType: "executor", ActorID: "executor-a"},
+		At:             now.Add(2 * time.Second),
+	}); err == nil {
+		t.Fatal("completion with an invalid second Artifact unexpectedly succeeded")
+	}
+
+	detail, err := repo.AgentRuntimeDetailForUser(bundle.Run.UserID, bundle.Run.ID)
+	if err != nil {
+		t.Fatalf("load detail after rollback: %v", err)
+	}
+	if detail.Run.Revision != claim.Run.Revision || detail.Run.EventSequence != claim.Run.EventSequence ||
+		detail.Steps[0].Revision != claim.Step.Revision || detail.Steps[0].Status != model.AgentStepStatusRunning ||
+		detail.Attempts[0].Revision != claim.Attempt.Revision || detail.Attempts[0].Status != model.AgentAttemptStatusRunning ||
+		len(detail.Artifacts) != 0 || len(detail.ArtifactRevisions) != 0 || len(detail.Events) != 2 {
+		t.Fatalf("failed completion left partial facts behind: %#v", detail)
+	}
+}
+
 func agentRuntimeTestBundle(runID string, idempotencyKey string, now time.Time) AgentRuntimeCreateBundle {
 	userID := "user-1"
 	stepID := runID + "-step"
 	run := &model.AgentRuntimeRun{
 		ID: runID, UserID: userID, ProjectID: "project-1", Domain: "film",
-		RegistryID: "film-agent-team", RegistryVersion: "1.3.1", IntentRouteID: "IR-01",
+		RegistryID: "film-agent-team", RegistryVersion: "1.3.1", RouteKind: "intent", IntentRouteID: "IR-01", RootRunID: runID,
 		Status: model.AgentRunStatusReady, Objective: "write a short film", InputJSON: "{}",
 		CurrentStepID: stepID, IdempotencyKey: idempotencyKey, Revision: 1, EventSequence: 1,
 		CreatedAt: now, UpdatedAt: now,
@@ -391,7 +571,7 @@ func agentRuntimeTestBundle(runID string, idempotencyKey string, now time.Time) 
 	return AgentRuntimeCreateBundle{
 		Run: run,
 		RoutingDecision: &model.AgentRoutingDecision{
-			ID: runID + "-route", RunID: run.ID, IntentRouteID: "IR-01", SelectedAgentID: step.AgentID,
+			ID: runID + "-route", RunID: run.ID, RouteKind: "intent", RouteID: "IR-01", IntentRouteID: "IR-01", SelectedAgentID: step.AgentID,
 			SelectedSkillIDsJSON: step.SkillIDsJSON, InputArtifactRefsJSON: "[]", AlternativesJSON: "[]",
 			Reason: "explicit route", Confidence: "confirmed", DecidedByType: "user", DecidedByID: userID, CreatedAt: now,
 		},
@@ -404,6 +584,35 @@ func agentRuntimeTestBundle(runID string, idempotencyKey string, now time.Time) 
 	}
 }
 
+func createAgentRuntimeTestProject(t *testing.T, db *gorm.DB, projectID string, userID string) {
+	t.Helper()
+	now := time.Now().UTC()
+	project := model.Project{
+		ID: projectID, UserID: userID, Name: projectID, Type: "short_drama", Status: model.ProjectStatusActive,
+		Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatalf("create Agent Runtime test Project: %v", err)
+	}
+}
+
+func agentRuntimeExecutionArtifactWrite(claim AgentRuntimeExecutionClaim, artifactType string) ProductionArtifactWrite {
+	artifactID := claim.Run.ID + "-artifact-" + artifactType
+	revisionID := claim.Run.ID + "-revision-" + artifactType
+	return ProductionArtifactWrite{
+		Artifact: model.ProductionArtifact{
+			ID: artifactID, UserID: claim.Run.UserID, ProjectID: claim.Run.ProjectID, Domain: claim.Run.Domain,
+			ArtifactType: artifactType, LogicalKey: "step:" + claim.Step.ID + ":" + artifactType,
+		},
+		Revision: model.ProductionArtifactRevision{
+			ID: revisionID, Status: model.ProductionArtifactStatusReview, ContentJSON: `{"schemaVersion":1}`,
+			ContentDigest: "digest-" + artifactType, SourceRunID: claim.Run.ID, SourceStepID: claim.Step.ID,
+			SourceAttemptID: claim.Attempt.ID, SourceArtifactRefsJSON: "[]", AuthorityRefsJSON: "[]",
+			CreatedByType: "agent", CreatedByID: claim.Step.AgentID,
+		},
+	}
+}
+
 func openAgentRuntimeTestDB(t *testing.T, path string) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
@@ -411,8 +620,10 @@ func openAgentRuntimeTestDB(t *testing.T, path string) *gorm.DB {
 		t.Fatalf("open database: %v", err)
 	}
 	if err := db.AutoMigrate(
+		&model.Project{},
 		&model.AgentRuntimeRun{}, &model.AgentRuntimeStep{}, &model.AgentRuntimeAttempt{},
 		&model.AgentRoutingDecision{}, &model.AgentHumanDecision{}, &model.AgentRuntimeEvent{},
+		&model.AgentHandoffTrigger{},
 		&model.ProductionArtifact{}, &model.ProductionArtifactRevision{},
 	); err != nil {
 		t.Fatalf("migrate agent runtime schema: %v", err)

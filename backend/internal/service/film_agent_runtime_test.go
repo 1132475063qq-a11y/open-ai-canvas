@@ -341,6 +341,7 @@ func newFilmAgentRuntimeTestService(t *testing.T) (*Service, *repository.Reposit
 		&model.Project{}, &model.CanvasProject{},
 		&model.AgentRuntimeRun{}, &model.AgentRuntimeStep{}, &model.AgentRuntimeAttempt{},
 		&model.AgentRoutingDecision{}, &model.AgentHumanDecision{}, &model.AgentRuntimeEvent{},
+		&model.AgentHandoffTrigger{},
 		&model.ProductionArtifact{}, &model.ProductionArtifactRevision{},
 	); err != nil {
 		t.Fatalf("migrate Film Agent Runtime database: %v", err)

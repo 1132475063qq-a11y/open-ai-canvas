@@ -24,11 +24,11 @@ and persisted runtime evidence.
 - Human gates pause and resume from an explicit decision record.
 - Provider credentials never enter prompts, logs, artifacts, or canvas data.
 
-Current status: **in progress**. Durable Run/Step/Attempt/Event state,
-optimistic revision fencing, immutable Artifact revisions, idempotent creation,
-human pause/resume, restart restoration, and secret rejection are implemented
-and tested. Provider-neutral execution, leases, and structured output schema
-validation remain open, so Gate 1 is not passed yet.
+Current status: **passed for the Film shared runtime**. Durable
+Run/Step/Attempt/Event state, optimistic revision fencing, immutable Artifact
+revisions, idempotent creation, human pause/resume, restart restoration, secret
+rejection, provider-neutral execution, lease recovery, strict structured output
+validation, and atomic completion are implemented and tested.
 
 ## Gate 2: Complete AgentTeam Registration
 
@@ -41,8 +41,10 @@ validation remain open, so Gate 1 is not passed yet.
 
 Current status: **registration complete, execution proof incomplete**. Exact
 counts, references, versioned source digests, startup failure behavior, and
-compilation of all 15 intent routes into Agent-owned Skill Steps pass. No Gate
-2 pass is claimed until every route completes through the real Executor and
+compilation of all 15 intent routes into Agent-owned Skill Steps pass. HR-01
+through HR-08 have structured automatic scheduling contracts; HR-09/10/11 are
+kept out of the Agent worker by design. No Gate 2 pass is claimed until every
+route completes through its intended real Executor or orchestration path and
 persists validated output Artifacts.
 
 ## Gate 3: Film Golden Path
@@ -55,6 +57,12 @@ One authorized short-drama fixture completes:
 - At least one human decision pauses and resumes correctly.
 - A failed generation retries as a new Attempt without overwriting history.
 - Canvas shows only key artifacts and attention items.
+
+Current status: **in progress**. The tested backend slice completes
+`script -> REVIEW -> human LOCKED -> HR-03 -> storyboard -> human LOCKED ->
+HR-04 + HR-05`, including durable Trigger recovery and idempotent Handoff Run
+creation. Planning, full visual/sound/production/QC progression, media
+generation, and canvas projection remain open.
 
 ## Gate 4: Film User Closure
 

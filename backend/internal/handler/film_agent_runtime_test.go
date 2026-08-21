@@ -23,7 +23,7 @@ import (
 )
 
 func TestFilmAgentRuntimeHTTPContract(t *testing.T) {
-	router, cookie, project := newFilmAgentRuntimeTestRouter(t)
+	router, cookie, project, repo, db := newFilmAgentRuntimeTestRouter(t)
 
 	unauthorized := filmAgentRuntimeRequest(t, router, http.MethodGet, "/api/projects/"+project.ID+"/film/agent-runtime/catalog", "", "", "")
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -105,6 +105,36 @@ func TestFilmAgentRuntimeHTTPContract(t *testing.T) {
 	if resolveEnvelope.Data.Run.Status != model.AgentRunStatusReady || resolveEnvelope.Data.HumanDecisions[0].Status != model.AgentHumanDecisionStatusResolved {
 		t.Fatalf("resolved HTTP Run is incoherent: %#v", resolveEnvelope.Data)
 	}
+	lockArtifact, lockRevision := createFilmAgentHandlerLockFixture(t, repo, db, resolveEnvelope.Data)
+	missingLockEvidence := filmAgentRuntimeRequest(t, router, http.MethodPost,
+		"/api/projects/"+project.ID+"/film/agent-runs/"+created.Run.ID+"/artifacts/"+lockArtifact.ID+"/lock",
+		`{"expectedRunRevision":1}`, cookie, "")
+	if missingLockEvidence.Code != http.StatusBadRequest {
+		t.Fatalf("missing lock evidence status = %d, body = %s", missingLockEvidence.Code, missingLockEvidence.Body.String())
+	}
+	lockBody := fmt.Sprintf(`{"expectedRunRevision":%d,"expectedArtifactSequence":%d,"expectedRevisionId":%q}`,
+		resolveEnvelope.Data.Run.Revision, lockArtifact.RevisionSequence, lockRevision.ID)
+	lockResponse := filmAgentRuntimeRequest(t, router, http.MethodPost,
+		"/api/projects/"+project.ID+"/film/agent-runs/"+created.Run.ID+"/artifacts/"+lockArtifact.ID+"/lock",
+		lockBody, cookie, "")
+	if lockResponse.Code != http.StatusOK {
+		t.Fatalf("lock Artifact status = %d, body = %s", lockResponse.Code, lockResponse.Body.String())
+	}
+	var lockEnvelope struct {
+		Data repository.ProductionArtifactLockResult `json:"data"`
+	}
+	decodeFilmAgentRuntimeResponse(t, lockResponse, &lockEnvelope)
+	if lockEnvelope.Data.SourceRevision.ID != lockRevision.ID || lockEnvelope.Data.SourceRevision.Status != model.ProductionArtifactStatusReview ||
+		lockEnvelope.Data.LockedRevision.Status != model.ProductionArtifactStatusLocked ||
+		lockEnvelope.Data.LockedRevision.ParentRevisionID != lockRevision.ID || lockEnvelope.Data.Trigger.Status != model.AgentHandoffTriggerStatusPending {
+		t.Fatalf("HTTP lock response is incomplete: %#v", lockEnvelope.Data)
+	}
+	staleLock := filmAgentRuntimeRequest(t, router, http.MethodPost,
+		"/api/projects/"+project.ID+"/film/agent-runs/"+created.Run.ID+"/artifacts/"+lockArtifact.ID+"/lock",
+		lockBody, cookie, "")
+	if staleLock.Code != http.StatusConflict {
+		t.Fatalf("stale lock status = %d, body = %s", staleLock.Code, staleLock.Body.String())
+	}
 
 	oversizedBody := `{"objective":"` + strings.Repeat("x", filmAgentRunRequestLimit) + `","intentRouteId":"IR-01"}`
 	oversized := filmAgentRuntimeRequest(t, router, http.MethodPost, "/api/projects/"+project.ID+"/film/agent-runs", oversizedBody, cookie, "film-http-large-0001")
@@ -113,7 +143,7 @@ func TestFilmAgentRuntimeHTTPContract(t *testing.T) {
 	}
 }
 
-func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Project) {
+func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Project, *repository.Repository, *gorm.DB) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "film-agent-handler.db")), &gorm.Config{})
@@ -124,6 +154,7 @@ func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Pro
 		&model.User{}, &model.AuthSession{}, &model.Project{}, &model.CanvasProject{},
 		&model.AgentRuntimeRun{}, &model.AgentRuntimeStep{}, &model.AgentRuntimeAttempt{},
 		&model.AgentRoutingDecision{}, &model.AgentHumanDecision{}, &model.AgentRuntimeEvent{},
+		&model.AgentHandoffTrigger{},
 		&model.ProductionArtifact{}, &model.ProductionArtifactRevision{},
 	); err != nil {
 		t.Fatalf("migrate handler database: %v", err)
@@ -160,7 +191,46 @@ func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Pro
 	router := gin.New()
 	api := router.Group("/api")
 	RegisterFilmAgentRuntimeRoutes(api, svc)
-	return router, service.SessionCookieName + "=" + session.ID + "." + token, project
+	return router, service.SessionCookieName + "=" + session.ID + "." + token, project, repo, db
+}
+
+func createFilmAgentHandlerLockFixture(t *testing.T, repo *repository.Repository, db *gorm.DB, detail repository.AgentRuntimeDetail) (model.ProductionArtifact, model.ProductionArtifactRevision) {
+	t.Helper()
+	now := time.Now().UTC()
+	step := detail.Steps[0]
+	if err := db.Model(&model.AgentRuntimeRun{}).Where("id = ?", detail.Run.ID).
+		Updates(map[string]any{"status": model.AgentRunStatusCompleted, "completed_at": now}).Error; err != nil {
+		t.Fatalf("complete handler fixture Run: %v", err)
+	}
+	if err := db.Model(&model.AgentRuntimeStep{}).Where("id = ?", step.ID).
+		Updates(map[string]any{"status": model.AgentStepStatusCompleted, "attempt_sequence": 1, "completed_at": now}).Error; err != nil {
+		t.Fatalf("complete handler fixture Step: %v", err)
+	}
+	attempt := model.AgentRuntimeAttempt{
+		ID: "handler-lock-attempt", RunID: detail.Run.ID, StepID: step.ID, Number: 1,
+		Status: model.AgentAttemptStatusSucceeded, Executor: "handler-fixture", InputDigest: "input", PromptDigest: "prompt",
+		RequestJSON: "{}", ResponseJSON: "{}", Revision: 1, StartedAt: &now, CompletedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := repo.Create(&attempt); err != nil {
+		t.Fatalf("create handler fixture Attempt: %v", err)
+	}
+	artifact := &model.ProductionArtifact{
+		ID: "handler-script-artifact", UserID: detail.Run.UserID, ProjectID: detail.Run.ProjectID, Domain: "film",
+		ArtifactType: "script", LogicalKey: "handler:script",
+	}
+	revision := &model.ProductionArtifactRevision{
+		ID: "handler-script-review", Status: model.ProductionArtifactStatusReview,
+		ContentJSON: `{"schemaVersion":1,"artifactType":"script"}`, ContentDigest: "handler-script-digest",
+		SourceRunID: detail.Run.ID, SourceStepID: step.ID, SourceAttemptID: attempt.ID,
+		SourceArtifactRefsJSON: "[]", AuthorityRefsJSON: "[]", CreatedByType: "agent", CreatedByID: step.AgentID,
+	}
+	persistedArtifact, persistedRevision, err := repo.CreateProductionArtifactRevision(repository.ProductionArtifactRevisionCreate{
+		UserID: detail.Run.UserID, Artifact: artifact, Revision: revision, ExpectedSequence: 0, At: now,
+	})
+	if err != nil {
+		t.Fatalf("create handler fixture Artifact: %v", err)
+	}
+	return *persistedArtifact, *persistedRevision
 }
 
 func filmAgentRuntimeRequest(t *testing.T, router http.Handler, method string, path string, body string, cookie string, idempotencyKey string) *httptest.ResponseRecorder {
