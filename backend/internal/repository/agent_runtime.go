@@ -19,6 +19,7 @@ var (
 	ErrAgentRuntimeInvalidTransition = errors.New("agent runtime state transition is invalid")
 	ErrAgentRuntimeActiveDecision    = errors.New("agent runtime already has a pending human decision")
 	ErrAgentRuntimeLeaseLost         = errors.New("agent runtime execution lease is no longer owned")
+	ErrAgentRuntimeProjectArchived   = errors.New("agent runtime project is archived")
 	ErrProductionArtifactConflict    = errors.New("production artifact changed concurrently")
 )
 
@@ -222,6 +223,14 @@ func (r *Repository) CreateAgentRuntimeBundle(bundle AgentRuntimeCreateBundle) e
 		return err
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		var project model.Project
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&project,
+			"id = ? AND user_id = ?", bundle.Run.ProjectID, bundle.Run.UserID).Error; err != nil {
+			return err
+		}
+		if project.Status == model.ProjectStatusArchived {
+			return ErrAgentRuntimeProjectArchived
+		}
 		if err := tx.Create(bundle.Run).Error; err != nil {
 			return err
 		}

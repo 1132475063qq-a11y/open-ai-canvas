@@ -89,19 +89,28 @@ func TestCreateFilmAgentRunPersistsLockedInputAndIsIdempotent(t *testing.T) {
 		created.Detail.Run.RegistryVersion != "1.3.1" || len(created.Detail.Run.RegistryDigest) != 64 || created.Detail.Run.IntentRouteID != "IR-01" {
 		t.Fatalf("unexpected created Run: %#v", created)
 	}
-	if len(created.Detail.RoutingDecisions) != 1 || len(created.Detail.Steps) != 1 || len(created.Detail.Events) != 2 ||
-		len(created.Detail.Artifacts) != 1 || len(created.Detail.ArtifactRevisions) != 1 {
+	if len(created.Detail.RoutingDecisions) != 1 || len(created.Detail.Steps) != 1 || len(created.Detail.Events) != 3 ||
+		len(created.Detail.Artifacts) != 3 || len(created.Detail.ArtifactRevisions) != 3 {
 		t.Fatalf("created Run evidence is incomplete: %#v", created.Detail)
 	}
 	step := created.Detail.Steps[0]
 	if step.AgentID != "narrative_screenwriter" || step.SkillIDsJSON != `["screenwriter"]` || step.Status != model.AgentStepStatusReady {
 		t.Fatalf("unexpected compiled Step: %#v", step)
 	}
-	artifact := created.Detail.Artifacts[0]
-	revision := created.Detail.ArtifactRevisions[0]
+	artifact, revision := findCurrentFilmArtifact(t, created.Detail, "project-requirements")
 	if artifact.ArtifactType != "project-requirements" || artifact.CurrentRevisionID != revision.ID || artifact.RevisionSequence != 1 ||
 		revision.Status != model.ProductionArtifactStatusLocked || revision.SourceRunID != created.Detail.Run.ID || revision.SourceStepID != step.ID || len(revision.ContentDigest) != 64 {
 		t.Fatalf("project-requirements Artifact is not locked evidence: artifact=%#v revision=%#v", artifact, revision)
+	}
+	for _, artifactType := range []string{"task", "routing-decision"} {
+		startArtifact, startRevision := findCurrentFilmArtifact(t, created.Detail, artifactType)
+		if startRevision.Status != model.ProductionArtifactStatusLocked || startRevision.SourceRunID != created.Detail.Run.ID ||
+			startRevision.SourceStepID != step.ID || startArtifact.LogicalKey != "run:"+created.Detail.Run.ID+":"+artifactType {
+			t.Fatalf("HR-10 %s Artifact is incomplete: artifact=%#v revision=%#v", artifactType, startArtifact, startRevision)
+		}
+	}
+	if created.Detail.Events[1].EventType != "handoff.hr10.completed" {
+		t.Fatalf("HR-10 orchestration Event is missing: %#v", created.Detail.Events)
 	}
 	var persistedInput map[string]any
 	if err := json.Unmarshal([]byte(created.Detail.Run.InputJSON), &persistedInput); err != nil {
@@ -115,7 +124,8 @@ func TestCreateFilmAgentRunPersistsLockedInputAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotent replay: %v", err)
 	}
-	if !replayed.Idempotent || replayed.Detail.Run.ID != created.Detail.Run.ID || replayed.Detail.Artifacts[0].ID != artifact.ID {
+	replayedRequirements, _ := findCurrentFilmArtifact(t, replayed.Detail, "project-requirements")
+	if !replayed.Idempotent || replayed.Detail.Run.ID != created.Detail.Run.ID || replayedRequirements.ID != artifact.ID {
 		t.Fatalf("idempotent replay created different facts: %#v", replayed)
 	}
 	if _, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-create-0001", CreateFilmAgentRunRequest{
@@ -124,7 +134,7 @@ func TestCreateFilmAgentRunPersistsLockedInputAndIsIdempotent(t *testing.T) {
 		t.Fatalf("changed request with reused idempotency key error = %v, want 409", err)
 	}
 	loaded, err := repo.AgentRuntimeDetailForUser(project.UserID, created.Detail.Run.ID)
-	if err != nil || len(loaded.Events) != 2 || len(loaded.ArtifactRevisions) != 1 {
+	if err != nil || len(loaded.Events) != 3 || len(loaded.ArtifactRevisions) != 3 {
 		t.Fatalf("restored Run evidence = %#v, error = %v", loaded, err)
 	}
 }
@@ -150,7 +160,7 @@ func TestFilmAgentRunReviewPauseResumeAndStaleReplay(t *testing.T) {
 		t.Fatalf("ResolveFilmAgentDecision(): %v", err)
 	}
 	if resolved.Run.Status != model.AgentRunStatusReady || resolved.Steps[0].Status != model.AgentStepStatusReady ||
-		resolved.HumanDecisions[0].Status != model.AgentHumanDecisionStatusResolved || resolved.Run.EventSequence != 3 {
+		resolved.HumanDecisions[0].Status != model.AgentHumanDecisionStatusResolved || resolved.Run.EventSequence != 4 {
 		t.Fatalf("review Run did not resume coherently: %#v", resolved)
 	}
 	if _, err := svc.ResolveFilmAgentDecision(project.UserID, project.ID, resolved.Run.ID, decision.ID, ResolveFilmAgentDecisionRequest{

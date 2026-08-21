@@ -63,8 +63,8 @@ Recorded on 2026-08-21 before convergence changes:
 
 ## Current Convergence Verification
 
-Recorded on 2026-08-21 on `codex/converged-runtime` after the Film Executor and
-durable Handoff slice:
+Recorded on 2026-08-21 on `codex/converged-runtime` after the Film Executor,
+durable Handoff, and orchestration-closeout slices:
 
 - `go vet ./...`: pass.
 - AgentRuntime, database, repository, handler, server, and all Film service
@@ -88,6 +88,17 @@ durable Handoff slice:
   storyboard schedules HR-04 and HR-05 in parallel. Trigger recovery, retries,
   terminal failure, OR/AND groups, root-lineage isolation, and exclusion of
   HR-09/10/11 from automatic Agent execution pass.
+- HR-10 project start is durable: every root Intent Run atomically owns locked
+  `project-requirements`, `task`, and `routing-decision` Artifacts plus an
+  ordered `handoff.hr10.completed` Event.
+- HR-09/HR-11 project closeout is explicit and replay-safe: preview evaluates
+  complete root-lineage evidence, locked deliverables, QC handoff, pending
+  decisions, and Registry identity; confirmation atomically writes one locked
+  `project-summary`, appends both orchestration Events, and archives the
+  project. Stale evidence, another root, another user, or post-archive writes
+  are rejected without partial state.
+- Focused repository/service closeout race tests pass. The AgentTeam authority
+  package's `validate_goal_acceptance.py` also passes unchanged.
 
 The five failures above remain upstream baseline issues and currently reproduce
 in this network/runtime environment. They do not touch the Film runtime paths.

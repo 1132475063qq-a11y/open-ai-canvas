@@ -143,6 +143,70 @@ func TestFilmAgentRuntimeHTTPContract(t *testing.T) {
 	}
 }
 
+func TestFilmAgentCloseoutHTTPContract(t *testing.T) {
+	router, cookie, project, repo, db := newFilmAgentRuntimeTestRouter(t)
+	createResponse := filmAgentRuntimeRequest(t, router, http.MethodPost, "/api/projects/"+project.ID+"/film/agent-runs",
+		`{"objective":"检查连续性","intentRouteId":"IR-12"}`, cookie, "film-http-closeout-0001")
+	if createResponse.Code != http.StatusOK {
+		t.Fatalf("create closeout RootRun status = %d, body = %s", createResponse.Code, createResponse.Body.String())
+	}
+	var createEnvelope struct {
+		Data service.FilmAgentRunCreateResult `json:"data"`
+	}
+	decodeFilmAgentRuntimeResponse(t, createResponse, &createEnvelope)
+	detail := createEnvelope.Data.Detail
+	prepareFilmAgentHandlerCloseoutFixture(t, repo, db, detail)
+
+	path := "/api/projects/" + project.ID + "/film/agent-runs/" + detail.Run.ID + "/closeout"
+	unauthorized := filmAgentRuntimeRequest(t, router, http.MethodGet, path, "", "", "")
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized closeout status = %d, body = %s", unauthorized.Code, unauthorized.Body.String())
+	}
+	previewResponse := filmAgentRuntimeRequest(t, router, http.MethodGet, path, "", cookie, "")
+	if previewResponse.Code != http.StatusOK {
+		t.Fatalf("closeout preview status = %d, body = %s", previewResponse.Code, previewResponse.Body.String())
+	}
+	var previewEnvelope struct {
+		Data service.FilmAgentCloseoutPreview `json:"data"`
+	}
+	decodeFilmAgentRuntimeResponse(t, previewResponse, &previewEnvelope)
+	preview := previewEnvelope.Data
+	if !preview.Ready || preview.Completed || len(preview.EvidenceFingerprint) != 64 || preview.QualityReport == nil {
+		t.Fatalf("HTTP closeout preview is incomplete: %#v", preview)
+	}
+	missingConfirmationBody := fmt.Sprintf(`{"expectedProjectRevision":%d,"expectedRootRunRevision":%d,"evidenceFingerprint":%q}`,
+		preview.ProjectRevision, preview.RootRunRevision, preview.EvidenceFingerprint)
+	missingConfirmation := filmAgentRuntimeRequest(t, router, http.MethodPost, path, missingConfirmationBody, cookie, "")
+	if missingConfirmation.Code != http.StatusBadRequest {
+		t.Fatalf("implicit closeout status = %d, body = %s", missingConfirmation.Code, missingConfirmation.Body.String())
+	}
+	confirmBody := fmt.Sprintf(`{"expectedProjectRevision":%d,"expectedRootRunRevision":%d,"evidenceFingerprint":%q,"confirm":true,"note":"验收通过"}`,
+		preview.ProjectRevision, preview.RootRunRevision, preview.EvidenceFingerprint)
+	confirmResponse := filmAgentRuntimeRequest(t, router, http.MethodPost, path, confirmBody, cookie, "")
+	if confirmResponse.Code != http.StatusOK {
+		t.Fatalf("confirm closeout status = %d, body = %s", confirmResponse.Code, confirmResponse.Body.String())
+	}
+	var confirmEnvelope struct {
+		Data service.FilmAgentCloseoutResult `json:"data"`
+	}
+	decodeFilmAgentRuntimeResponse(t, confirmResponse, &confirmEnvelope)
+	if confirmEnvelope.Data.Idempotent || confirmEnvelope.Data.Project.Status != model.ProjectStatusArchived ||
+		confirmEnvelope.Data.SummaryRevision.Status != model.ProductionArtifactStatusLocked {
+		t.Fatalf("HTTP closeout result is incomplete: %#v", confirmEnvelope.Data)
+	}
+	replayResponse := filmAgentRuntimeRequest(t, router, http.MethodPost, path, confirmBody, cookie, "")
+	if replayResponse.Code != http.StatusOK {
+		t.Fatalf("replay closeout status = %d, body = %s", replayResponse.Code, replayResponse.Body.String())
+	}
+	var replayEnvelope struct {
+		Data service.FilmAgentCloseoutResult `json:"data"`
+	}
+	decodeFilmAgentRuntimeResponse(t, replayResponse, &replayEnvelope)
+	if !replayEnvelope.Data.Idempotent || replayEnvelope.Data.SummaryRevision.ID != confirmEnvelope.Data.SummaryRevision.ID {
+		t.Fatalf("HTTP closeout replay created different evidence: %#v", replayEnvelope.Data)
+	}
+}
+
 func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Project, *repository.Repository, *gorm.DB) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -231,6 +295,62 @@ func createFilmAgentHandlerLockFixture(t *testing.T, repo *repository.Repository
 		t.Fatalf("create handler fixture Artifact: %v", err)
 	}
 	return *persistedArtifact, *persistedRevision
+}
+
+func prepareFilmAgentHandlerCloseoutFixture(t *testing.T, repo *repository.Repository, db *gorm.DB, detail repository.AgentRuntimeDetail) {
+	t.Helper()
+	now := time.Now().UTC()
+	step := detail.Steps[0]
+	attempt := model.AgentRuntimeAttempt{
+		ID: detail.Run.ID + "-http-closeout-attempt", RunID: detail.Run.ID, StepID: step.ID, Number: 1,
+		Status: model.AgentAttemptStatusSucceeded, Executor: "handler-closeout-fixture", InputDigest: "input", PromptDigest: "prompt",
+		RequestJSON: "{}", ResponseJSON: "{}", Revision: 1, StartedAt: &now, CompletedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := repo.Create(&attempt); err != nil {
+		t.Fatalf("create handler closeout Attempt: %v", err)
+	}
+	if err := db.Model(&model.AgentRuntimeStep{}).Where("id = ?", step.ID).Updates(map[string]any{
+		"status": model.AgentStepStatusCompleted, "attempt_sequence": 1, "completed_at": now,
+	}).Error; err != nil {
+		t.Fatalf("complete handler closeout Step: %v", err)
+	}
+	if err := db.Model(&model.AgentRuntimeRun{}).Where("id = ?", detail.Run.ID).Updates(map[string]any{
+		"status": model.AgentRunStatusCompleted, "completed_at": now,
+	}).Error; err != nil {
+		t.Fatalf("complete handler closeout Run: %v", err)
+	}
+	createArtifact := func(artifactType string) (model.ProductionArtifact, model.ProductionArtifactRevision) {
+		artifact := &model.ProductionArtifact{
+			ID: detail.Run.ID + "-http-artifact-" + artifactType, UserID: detail.Run.UserID, ProjectID: detail.Run.ProjectID,
+			Domain: "film", ArtifactType: artifactType, LogicalKey: "run:" + detail.Run.ID + ":" + artifactType,
+		}
+		revision := &model.ProductionArtifactRevision{
+			ID: detail.Run.ID + "-http-revision-" + artifactType, Status: model.ProductionArtifactStatusLocked,
+			ContentJSON: `{"schemaVersion":1,"artifactType":"` + artifactType + `"}`, ContentDigest: "http-digest-" + artifactType,
+			SourceRunID: detail.Run.ID, SourceStepID: step.ID, SourceAttemptID: attempt.ID,
+			SourceArtifactRefsJSON: "[]", AuthorityRefsJSON: "[]", CreatedByType: "agent", CreatedByID: step.AgentID,
+		}
+		persistedArtifact, persistedRevision, err := repo.CreateProductionArtifactRevision(repository.ProductionArtifactRevisionCreate{
+			UserID: detail.Run.UserID, Artifact: artifact, Revision: revision, ExpectedSequence: 0, At: now,
+		})
+		if err != nil {
+			t.Fatalf("create handler closeout %s Artifact: %v", artifactType, err)
+		}
+		return *persistedArtifact, *persistedRevision
+	}
+	createArtifact("continuity-report")
+	createArtifact("continuity-ledger")
+	qcArtifact, qcRevision := createArtifact("qc-report")
+	trigger := model.AgentHandoffTrigger{
+		ID: detail.Run.ID + "-http-qc-trigger", UserID: detail.Run.UserID, ProjectID: detail.Run.ProjectID, Domain: "film",
+		RootRunID: detail.Run.ID, ArtifactID: qcArtifact.ID, RevisionID: qcRevision.ID,
+		SourceRunID: detail.Run.ID, SourceStepID: step.ID, SourceAgentID: step.AgentID,
+		Status: model.AgentHandoffTriggerStatusCompleted, AttemptCount: 1, ScheduledRunIDsJSON: "[]", Revision: 1,
+		CompletedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := repo.Create(&trigger); err != nil {
+		t.Fatalf("create handler closeout QC Trigger: %v", err)
+	}
 }
 
 func filmAgentRuntimeRequest(t *testing.T, router http.Handler, method string, path string, body string, cookie string, idempotencyKey string) *httptest.ResponseRecorder {

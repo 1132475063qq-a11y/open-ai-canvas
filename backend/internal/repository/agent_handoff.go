@@ -85,6 +85,14 @@ func (r *Repository) LockProductionArtifactForHandoff(command ProductionArtifact
 	now := runtimeCommandTime(command.At)
 	result := &ProductionArtifactLockResult{}
 	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var project model.Project
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&project,
+			"id = ? AND user_id = ?", command.ProjectID, command.UserID).Error; err != nil {
+			return err
+		}
+		if project.Status == model.ProjectStatusArchived {
+			return ErrAgentRuntimeProjectArchived
+		}
 		var run model.AgentRuntimeRun
 		if err := lockAgentRuntimeRun(tx, command.UserID, command.RunID, &run); err != nil {
 			return err

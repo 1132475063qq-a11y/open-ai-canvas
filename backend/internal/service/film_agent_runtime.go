@@ -127,15 +127,24 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
-	inputRefs, err := s.resolveFilmInputArtifactRefs(userID, project.ID, request.InputArtifactRevisionIDs)
+	externalInputRefs, err := s.resolveFilmInputArtifactRefs(userID, project.ID, request.InputArtifactRevisionIDs)
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
-	inputRefs = append([]FilmProductionArtifactRef{projectRequirementRef}, inputRefs...)
-	if err := validateFilmRouteInputs(route, inputRefs); err != nil {
+	authorityRefs := append([]FilmProductionArtifactRef{projectRequirementRef}, externalInputRefs...)
+	if err := validateFilmRouteInputs(route, authorityRefs); err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
+	startArtifacts, startRevisions, startRefs, err := s.buildFilmProjectStartArtifacts(
+		userID, *project, runID, steps[0].ID, objective, route, selectedAgentID,
+		routeReason, routeConfidence, authorityRefs, request.ReviewBeforeExecution, createdAt,
+	)
+	if err != nil {
+		return FilmAgentRunCreateResult{}, err
+	}
+	inputRefs := append(append([]FilmProductionArtifactRef(nil), authorityRefs...), startRefs...)
 	inputRefsJSON, _ := json.Marshal(inputRefs)
+	authorityRefsJSON, _ := json.Marshal(authorityRefs)
 	for index := range steps {
 		steps[index].InputArtifactRefsJSON = string(inputRefsJSON)
 	}
@@ -155,17 +164,18 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 		RegistryID: s.filmAgentRegistry.ID, RegistryVersion: s.filmAgentRegistry.Version, RegistryDigest: s.filmAgentRegistry.SourceDigest,
 		RouteKind: "intent", IntentRouteID: route.ID, RootRunID: runID,
 		Status: runStatus, Objective: objective, InputJSON: string(runInputJSON),
-		CurrentStepID: steps[0].ID, IdempotencyKey: idempotencyKey, Revision: 1, EventSequence: 2,
+		CurrentStepID: steps[0].ID, IdempotencyKey: idempotencyKey, Revision: 1, EventSequence: 3,
 		CreatedAt: createdAt, UpdatedAt: createdAt,
 	}
 	routing := &model.AgentRoutingDecision{
 		ID: newID(), RunID: run.ID, RouteKind: "intent", RouteID: route.ID, IntentRouteID: route.ID, SelectedAgentID: selectedAgentID,
-		SelectedSkillIDsJSON: mustFilmJSON(route.SkillIDs), InputArtifactRefsJSON: string(inputRefsJSON), AlternativesJSON: "[]",
+		SelectedSkillIDsJSON: mustFilmJSON(route.SkillIDs), InputArtifactRefsJSON: string(authorityRefsJSON), AlternativesJSON: "[]",
 		Reason: routeReason, Confidence: routeConfidence, DecidedByType: "runtime", DecidedByID: "film-router-v1", CreatedAt: createdAt,
 	}
 	events := []model.AgentRuntimeEvent{
 		{ID: newID(), UserID: userID, RunID: run.ID, Sequence: 1, EventType: "run.created", ActorType: "user", ActorID: userID, ToStatus: string(model.AgentRunStatusPlanning), PayloadJSON: mustFilmJSON(map[string]any{"registryDigest": run.RegistryDigest}), CreatedAt: createdAt},
-		{ID: newID(), UserID: userID, RunID: run.ID, Sequence: 2, StepID: steps[0].ID, EventType: "run.planned", ActorType: "runtime", ActorID: "film-router-v1", FromStatus: string(model.AgentRunStatusPlanning), ToStatus: string(runStatus), PayloadJSON: mustFilmJSON(map[string]any{"intentRouteId": route.ID, "agentId": selectedAgentID, "skillIds": route.SkillIDs}), CreatedAt: createdAt},
+		{ID: newID(), UserID: userID, RunID: run.ID, Sequence: 2, StepID: steps[0].ID, EventType: "handoff.hr10.completed", ActorType: "runtime", ActorID: "film-project-lead-orchestrator-v1", FromStatus: string(model.AgentRunStatusPlanning), ToStatus: string(model.AgentRunStatusPlanning), PayloadJSON: mustFilmJSON(map[string]any{"handoffRouteId": "HR-10", "artifactRefs": startRefs, "intentRouteId": route.ID, "agentId": selectedAgentID, "skillIds": route.SkillIDs}), CreatedAt: createdAt},
+		{ID: newID(), UserID: userID, RunID: run.ID, Sequence: 3, StepID: steps[0].ID, EventType: "run.planned", ActorType: "runtime", ActorID: "film-router-v1", FromStatus: string(model.AgentRunStatusPlanning), ToStatus: string(runStatus), PayloadJSON: mustFilmJSON(map[string]any{"intentRouteId": route.ID, "agentId": selectedAgentID, "skillIds": route.SkillIDs}), CreatedAt: createdAt},
 	}
 	var decision *model.AgentHumanDecision
 	if request.ReviewBeforeExecution {
@@ -176,13 +186,14 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 			Recommendation: "approve", ResponseJSON: "", ImpactRefsJSON: string(inputRefsJSON), Revision: 1,
 			CreatedAt: createdAt, UpdatedAt: createdAt,
 		}
-		events[1].EventType = "human_decision.requested"
-		events[1].PayloadJSON = mustFilmJSON(map[string]any{"decisionId": decision.ID, "intentRouteId": route.ID})
+		events[2].EventType = "human_decision.requested"
+		events[2].PayloadJSON = mustFilmJSON(map[string]any{"decisionId": decision.ID, "intentRouteId": route.ID})
 	}
+	artifacts := append([]model.ProductionArtifact{projectRequirementArtifact}, startArtifacts...)
+	artifactRevisions := append([]model.ProductionArtifactRevision{projectRequirementRevision}, startRevisions...)
 	bundle := repository.AgentRuntimeCreateBundle{
 		Run: run, RoutingDecision: routing, Steps: steps, HumanDecision: decision, Events: events,
-		Artifacts:         []model.ProductionArtifact{projectRequirementArtifact},
-		ArtifactRevisions: []model.ProductionArtifactRevision{projectRequirementRevision},
+		Artifacts: artifacts, ArtifactRevisions: artifactRevisions,
 	}
 	if err := s.repo.CreateAgentRuntimeBundle(bundle); err != nil {
 		if existing, lookupErr := s.repo.AgentRuntimeRunByIdempotency(userID, idempotencyKey); lookupErr == nil && existing.ProjectID == project.ID && filmRunRequestDigest(existing.InputJSON) == requestDigest {
@@ -605,6 +616,86 @@ func buildFilmProjectRequirementsArtifact(userID string, project model.Project, 
 	return artifact, revision, ref, nil
 }
 
+func (s *Service) buildFilmProjectStartArtifacts(
+	userID string,
+	project model.Project,
+	runID string,
+	stepID string,
+	objective string,
+	intentRoute agentruntime.IntentRouteDefinition,
+	selectedAgentID string,
+	routeReason string,
+	routeConfidence string,
+	authorityRefs []FilmProductionArtifactRef,
+	reviewBeforeExecution bool,
+	at time.Time,
+) ([]model.ProductionArtifact, []model.ProductionArtifactRevision, []FilmProductionArtifactRef, error) {
+	handoff, ok := s.filmAgentRegistry.HandoffRoute("HR-10")
+	if !ok || handoff.ExecutionMode != "orchestration" || handoff.InputResolutionMode != "project_start" ||
+		!filmContainsString(handoff.OutputArtifactTypes, "task") || !filmContainsString(handoff.OutputArtifactTypes, "routing-decision") {
+		return nil, nil, nil, errors.New("Film AgentTeam HR-10 项目启动合同无效")
+	}
+	inputRevisionIDs := make([]string, 0, len(authorityRefs))
+	for _, ref := range authorityRefs {
+		inputRevisionIDs = append(inputRevisionIDs, ref.RevisionID)
+	}
+	contents := []struct {
+		artifactType string
+		content      map[string]any
+	}{
+		{
+			artifactType: "task",
+			content: map[string]any{
+				"schemaVersion": 1, "artifactType": "task", "handoffRouteId": handoff.ID,
+				"rootRunId": runID, "objective": objective, "intentRouteId": intentRoute.ID,
+				"assignedAgentId": selectedAgentID, "skillIds": intentRoute.SkillIDs,
+				"inputArtifactRevisionIds": inputRevisionIDs, "expectedOutputArtifactTypes": intentRoute.OutputArtifactTypes,
+				"reviewBeforeExecution": reviewBeforeExecution,
+			},
+		},
+		{
+			artifactType: "routing-decision",
+			content: map[string]any{
+				"schemaVersion": 1, "artifactType": "routing-decision", "handoffRouteId": handoff.ID,
+				"rootRunId": runID, "intentRouteId": intentRoute.ID, "selectedAgentId": selectedAgentID,
+				"selectedSkillIds": intentRoute.SkillIDs, "candidateAgentIds": append([]string{intentRoute.PrimaryAgentID}, intentRoute.CandidateAgentIDs...),
+				"reason": routeReason, "confidence": routeConfidence, "inputArtifactRevisionIds": inputRevisionIDs,
+				"registry": map[string]any{"id": s.filmAgentRegistry.ID, "version": s.filmAgentRegistry.Version, "digest": s.filmAgentRegistry.SourceDigest},
+			},
+		},
+	}
+	artifacts := make([]model.ProductionArtifact, 0, len(contents))
+	revisions := make([]model.ProductionArtifactRevision, 0, len(contents))
+	refs := make([]FilmProductionArtifactRef, 0, len(contents))
+	for _, item := range contents {
+		content, err := json.Marshal(item.content)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		artifactID := newID()
+		revisionID := newID()
+		digest := digestBytesHex(content)
+		artifact := model.ProductionArtifact{
+			ID: artifactID, UserID: userID, ProjectID: project.ID, Domain: "film", ArtifactType: item.artifactType,
+			LogicalKey: "run:" + runID + ":" + item.artifactType, CurrentRevisionID: revisionID, RevisionSequence: 1,
+			CreatedAt: at, UpdatedAt: at,
+		}
+		revision := model.ProductionArtifactRevision{
+			ID: revisionID, ArtifactID: artifactID, Version: 1, Status: model.ProductionArtifactStatusLocked,
+			ContentJSON: string(content), ContentDigest: digest, SourceRunID: runID, SourceStepID: stepID,
+			SourceArtifactRefsJSON: mustFilmJSON(authorityRefs), AuthorityRefsJSON: mustFilmJSON(authorityRefs),
+			CreatedByType: "runtime", CreatedByID: "film-project-lead-orchestrator-v1", CreatedAt: at,
+		}
+		artifacts = append(artifacts, artifact)
+		revisions = append(revisions, revision)
+		refs = append(refs, FilmProductionArtifactRef{
+			ArtifactID: artifactID, RevisionID: revisionID, Type: item.artifactType, Version: 1,
+			Digest: digest, Status: string(model.ProductionArtifactStatusLocked),
+		})
+	}
+	return artifacts, revisions, refs, nil
+}
+
 func digestFilmAgentRequest(projectID string, objective string, routeID string, agentID string, logicalModelID string, input map[string]any, revisionIDs []string, review bool) (string, error) {
 	encoded, err := json.Marshal(map[string]any{
 		"projectId": projectID, "objective": objective, "intentRouteId": routeID, "agentId": agentID,
@@ -674,6 +765,8 @@ func mapAgentRuntimeRepositoryError(err error) error {
 	switch {
 	case errors.Is(err, repository.ErrAgentRuntimeStateConflict), errors.Is(err, repository.ErrAgentRuntimeActiveDecision), errors.Is(err, repository.ErrProductionArtifactConflict):
 		return conflictError("Film Agent Run 已发生变化，请刷新后重试")
+	case errors.Is(err, repository.ErrAgentRuntimeProjectArchived):
+		return conflictError("项目已归档，不能创建或修改 Film Agent Run")
 	case errors.Is(err, repository.ErrAgentRuntimeInvalidTransition):
 		return conflictError("当前 Film Agent 状态不允许该操作")
 	case errors.Is(err, gorm.ErrRecordNotFound):

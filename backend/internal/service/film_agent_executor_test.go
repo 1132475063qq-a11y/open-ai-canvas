@@ -153,8 +153,8 @@ func TestProcessNextFilmAgentStepRecordsInvalidStructuredOutputAsFailure(t *test
 	}
 	if detail.Run.Status != model.AgentRunStatusFailed || detail.Run.FailureCode != "film_structured_output_invalid" ||
 		detail.Steps[0].Status != model.AgentStepStatusFailed || detail.Attempts[0].Status != model.AgentAttemptStatusFailed ||
-		detail.Attempts[0].FailureCode != "film_structured_output_invalid" || len(detail.Artifacts) != 1 ||
-		len(detail.ArtifactRevisions) != 1 || detail.Events[len(detail.Events)-1].EventType != "attempt.failed" {
+		detail.Attempts[0].FailureCode != "film_structured_output_invalid" || len(detail.Artifacts) != 3 ||
+		len(detail.ArtifactRevisions) != 3 || detail.Events[len(detail.Events)-1].EventType != "attempt.failed" {
 		t.Fatalf("invalid model output did not leave a complete failure record: %#v", detail)
 	}
 }

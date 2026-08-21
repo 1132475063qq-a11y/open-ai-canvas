@@ -18,6 +18,7 @@ func TestAgentRuntimeBundlePersistsAcrossRepositoryRestart(t *testing.T) {
 	db := openAgentRuntimeTestDB(t, databasePath)
 	repo := New(db)
 	now := time.Now().UTC()
+	createAgentRuntimeTestProject(t, db, "project-1", "user-1")
 	run := model.AgentRuntimeRun{
 		ID: "run-1", UserID: "user-1", ProjectID: "project-1", Domain: "film",
 		RegistryID: "film-agent-team", RegistryVersion: "1.3.1", IntentRouteID: "IR-01",
@@ -76,6 +77,7 @@ func TestAgentRuntimeBundleIsAtomicAndIdempotencyIsUnique(t *testing.T) {
 	db := openAgentRuntimeTestDB(t, filepath.Join(t.TempDir(), "agent-runtime.db"))
 	repo := New(db)
 	now := time.Now().UTC()
+	createAgentRuntimeTestProject(t, db, "project-1", "user-1")
 	run := model.AgentRuntimeRun{
 		ID: "run-invalid", UserID: "user-1", ProjectID: "project-1", Domain: "film",
 		RegistryID: "film-agent-team", RegistryVersion: "1.3.1", IntentRouteID: "IR-01",
@@ -121,6 +123,7 @@ func TestAgentRuntimeTransitionsFenceStaleRevisionsAndAppendEvents(t *testing.T)
 	repo := New(db)
 	now := time.Now().UTC()
 	bundle := agentRuntimeTestBundle("run-transition", "transition-request", now)
+	createAgentRuntimeTestProject(t, db, bundle.Run.ProjectID, bundle.Run.UserID)
 	if err := repo.CreateAgentRuntimeBundle(bundle); err != nil {
 		t.Fatalf("create bundle: %v", err)
 	}
@@ -180,6 +183,7 @@ func TestAgentRuntimeAttemptsRemainAppendOnlyAcrossRetry(t *testing.T) {
 	repo := New(db)
 	now := time.Now().UTC()
 	bundle := agentRuntimeTestBundle("run-attempt", "attempt-request", now)
+	createAgentRuntimeTestProject(t, db, bundle.Run.ProjectID, bundle.Run.UserID)
 	if err := repo.CreateAgentRuntimeBundle(bundle); err != nil {
 		t.Fatalf("create bundle: %v", err)
 	}
@@ -308,6 +312,7 @@ func TestHumanDecisionPauseAndResumeAreAtomicAndReplaySafe(t *testing.T) {
 	repo := New(db)
 	now := time.Now().UTC()
 	bundle := agentRuntimeTestBundle("run-decision", "decision-request", now)
+	createAgentRuntimeTestProject(t, db, bundle.Run.ProjectID, bundle.Run.UserID)
 	if err := repo.CreateAgentRuntimeBundle(bundle); err != nil {
 		t.Fatalf("create bundle: %v", err)
 	}

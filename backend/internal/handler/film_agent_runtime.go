@@ -138,6 +138,38 @@ func RegisterFilmAgentRuntimeRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, result)
 	})
+	film.GET("/agent-runs/:runId/closeout", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		preview, err := svc.PreviewFilmAgentCloseout(user.ID, c.Param("id"), c.Param("runId"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, preview)
+	})
+	film.POST("/agent-runs/:runId/closeout", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, filmAgentDecisionRequestLimit)
+		var request service.ConfirmFilmAgentCloseoutRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			failFilmAgentBind(c, err)
+			return
+		}
+		result, err := svc.ConfirmFilmAgentCloseout(user.ID, c.Param("id"), c.Param("runId"), request)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
 }
 
 func filmAgentRunListLimit(raw string) (int, error) {

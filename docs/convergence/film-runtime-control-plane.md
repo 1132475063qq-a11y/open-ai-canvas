@@ -11,7 +11,8 @@ The Film AgentTeam v1.3.1 control plane is backend-owned and isolated to
   `HumanDecision`, ordered `Event`, stable `ProductionArtifact`, and immutable
   `ProductionArtifactRevision` records.
 - Optimistic revision fencing for concurrent state changes.
-- Atomic Run creation with a locked `project-requirements` Artifact revision.
+- Atomic root Run creation with locked `project-requirements`, `task`, and
+  `routing-decision` Artifact revisions plus the HR-10 completion Event.
 - Deterministic explicit-route or exact-trigger routing and Agent ownership
   checks for every compiled Skill Step.
 - Human review pause/resume, failed-Step retry as a new Attempt, restart
@@ -33,6 +34,12 @@ The Film AgentTeam v1.3.1 control plane is backend-owned and isolated to
 - Handoff input resolution with OR semantics inside a required group and AND
   semantics between groups, restricted to current locked Artifacts from one
   user/project/domain/root lineage.
+- Explicit HR-09/HR-11 closeout. A read-only preview returns blockers and a
+  SHA-256 fingerprint over project, Registry, Run, Step, Attempt, routing,
+  human-decision, Handoff Trigger, and current Artifact facts. User confirmation
+  rechecks that evidence under transaction locks, then atomically creates one
+  locked `project-summary`, appends ordered HR-09/HR-11 Events, and archives the
+  project. Replays return the original Summary.
 - Browser-safe catalog output that omits executable Agent developer
   instructions and Skill instruction bodies.
 
@@ -49,6 +56,8 @@ All endpoints require a valid session and a Film (`short-drama`) project:
 | `POST` | `/api/projects/:id/film/agent-runs/:runId/decisions/:decisionId/resolve` | Approve or cancel a human gate |
 | `POST` | `/api/projects/:id/film/agent-runs/:runId/steps/:stepId/retry` | Append a retry Attempt for a failed Step |
 | `POST` | `/api/projects/:id/film/agent-runs/:runId/artifacts/:artifactId/lock` | Append a user-approved locked revision and Handoff Trigger |
+| `GET` | `/api/projects/:id/film/agent-runs/:runId/closeout` | Preview final deliverables, QC evidence, blockers, revisions, and evidence fingerprint |
+| `POST` | `/api/projects/:id/film/agent-runs/:runId/closeout` | Explicitly confirm evidence-fenced HR-09/HR-11 closeout and archive |
 
 Run creation requires `X-Idempotency-Key` with 8-128 safe characters. The same
 user/key/request returns the original Run; reusing the key for changed input is
@@ -62,7 +71,8 @@ From `backend/` with Go 1.25, the convergence suites pass with:
 ```bash
 go vet ./...
 go test ./internal/agentruntime ./internal/database ./internal/repository ./internal/handler ./cmd/server -count=1
-go test ./internal/service -skip 'TestChannelFromRequestStoresAndClearsHeaders|TestRuntimeConcurrencyUsesEnvironmentFallback|TestQiniuKodoSettingAllowsMissingCDNBaseURL|TestOnlyResumableNewAPIChannel2VideoDeadlinesStayRunning|TestResumableVideoDeadlineUsesResolvedSystemChannelProtocol' -count=1
+go test ./internal/service -skip 'Test(ChannelFromRequestStoresAndClearsHeaders|RuntimeConcurrencyUsesEnvironmentFallback|QiniuKodoSettingAllowsMissingCDNBaseURL|OnlyResumableNewAPIChannel2VideoDeadlinesStayRunning|ResumableVideoDeadlineUsesResolvedSystemChannelProtocol)$' -count=1
+go test -race ./internal/repository ./internal/service -run 'Test(FilmAgentCloseout|AgentRuntimeCloseout|CreateAgentRuntimeBundleRejectsArchived)' -count=1
 ```
 
 Focused runtime suites:
@@ -70,6 +80,13 @@ Focused runtime suites:
 ```bash
 go test ./internal/agentruntime ./internal/database ./internal/repository ./internal/handler -count=1
 go test ./internal/service -run 'TestFilmAgent|TestCreateFilmAgent|TestArchivedFilm|TestRetryFilmAgent|TestProcessNextFilmAgent|TestLockedFilmArtifacts' -count=1
+```
+
+The read-only AgentTeam authority package is validated separately from its own
+directory:
+
+```bash
+python3 scripts/validate_goal_acceptance.py
 ```
 
 An unfiltered `go test ./... -count=1` currently reproduces five upstream
@@ -84,14 +101,15 @@ The following are intentionally not claimed as complete:
 - Only the IR-01 provider path has an HTTP-backed provider integration test;
   every Intent and automatic Handoff route has not yet completed against a real
   configured provider.
-- HR-09 project closeout, HR-10 project-start dispatch, and HR-11 project
-  completion remain orchestration work rather than automatic Agent Runs.
+- HR-09, HR-10, and HR-11 now have durable orchestration evidence, but the final
+  closeout fixture does not claim that the missing real media stages ran.
 - No image/video Task, provider Result, automatic visual QC, continuity pass,
   cost confirmation, or final export is produced by this runtime yet.
 - The Film workspace does not yet project Run attention items and key Artifacts
   into the upstream canvas UI.
 
-The tested Film slice now reaches script execution, immutable human lock,
-durable HR-03 scheduling, storyboard execution, and parallel HR-04/HR-05 Run
-creation. Gate 2 and the complete Film golden path still require all route and
+The tested Film slice now reaches HR-10 project start, script execution,
+immutable human lock, durable HR-03 scheduling, storyboard execution, parallel
+HR-04/HR-05 Run creation, and an evidence-fenced HR-09/HR-11 closeout fixture.
+Gate 2 and the complete Film golden path still require all Agent routes and real
 media stages to produce persisted runtime evidence.
