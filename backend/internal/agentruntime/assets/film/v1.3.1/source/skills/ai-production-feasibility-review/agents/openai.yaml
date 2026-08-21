@@ -1,0 +1,5 @@
+interface:
+  display_name: "AI制作可行性审查"
+  short_description: "制作前需判断 AI 图像/视频工作流的风险、拆分和降级方案时使用"
+  default_prompt: "使用 ai-production-feasibility-review：先读取锁定事实和版本化输入，按本 Skill 的阶段门禁交付可追溯结果。"
+  invocation: "implicit"

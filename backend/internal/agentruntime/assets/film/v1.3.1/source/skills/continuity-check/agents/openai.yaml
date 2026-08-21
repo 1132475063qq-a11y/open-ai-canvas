@@ -1,0 +1,5 @@
+interface:
+  display_name: "连续性检查"
+  short_description: "需跨剧本、分集、分镜、角色、场景和提示词定位连续性冲突时使用"
+  default_prompt: "使用 continuity-check：先读取锁定事实和版本化输入，按本 Skill 的阶段门禁交付可追溯结果。"
+  invocation: "implicit"

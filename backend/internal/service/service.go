@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"infinite-canvas/backend/internal/agentruntime"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/repository"
 )
@@ -35,6 +36,7 @@ type Service struct {
 	pendingStorage        map[string]int64
 	coordinator           *runtimeCoordinator
 	runtimeErr            error
+	filmAgentRegistry     *agentruntime.Registry
 	workerID              string
 	routeCatalogMu        sync.RWMutex
 	routeCatalogRefreshMu sync.Mutex
@@ -205,8 +207,15 @@ func New(repo *repository.Repository, dataDir string) *Service {
 }
 
 func NewWithRuntimeCapabilities(repo *repository.Repository, dataDir string, capabilities RuntimeCapabilities) *Service {
-	coordinator, err := newRuntimeCoordinator(repo.Dialect())
-	return &Service{repo: repo, dataDir: dataDir, runtimeCapabilities: capabilities, activeCancels: make(map[string]context.CancelFunc), coordinator: coordinator, runtimeErr: err, workerID: newID(), routeCatalogTTL: 30 * time.Second, routeCatalogMaxStale: 5 * time.Minute, routeHealthBlocked: make(map[string]time.Time)}
+	coordinator, coordinatorErr := newRuntimeCoordinator(repo.Dialect())
+	filmRegistry, registryErr := agentruntime.LoadFilmRegistry()
+	return &Service{
+		repo: repo, dataDir: dataDir, runtimeCapabilities: capabilities,
+		activeCancels: make(map[string]context.CancelFunc), coordinator: coordinator,
+		runtimeErr: errors.Join(coordinatorErr, registryErr), filmAgentRegistry: filmRegistry,
+		workerID: newID(), routeCatalogTTL: 30 * time.Second, routeCatalogMaxStale: 5 * time.Minute,
+		routeHealthBlocked: make(map[string]time.Time),
+	}
 }
 
 func (s *Service) StartWorker() {

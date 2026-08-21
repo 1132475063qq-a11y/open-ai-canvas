@@ -3,6 +3,7 @@ out/
 node_modules/
 docs/*
 !docs/design/
+!docs/convergence/
 !docs/index.md
 .env*
 !.env.example

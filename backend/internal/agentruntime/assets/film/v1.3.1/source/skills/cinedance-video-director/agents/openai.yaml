@@ -1,0 +1,5 @@
+interface:
+  display_name: "CINEDANCE 视频导演"
+  short_description: "Seedance/Higgsfield 的空间、光学、物理与时间轴提示词导演层"
+  default_prompt: "使用 cinedance-video-director：读取已锁定 Shot Contract、Reference Lock 与表演适配，编译为可独立执行的 Seedance/Higgsfield 提示词；不得改变导演意图或声称已生成媒体。"
+  invocation: "implicit"

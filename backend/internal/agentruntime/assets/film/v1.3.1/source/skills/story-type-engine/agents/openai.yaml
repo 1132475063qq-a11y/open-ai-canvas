@@ -1,0 +1,5 @@
+interface:
+  display_name: "Story Type Engine"
+  short_description: "比较并落实十种故事类型的因果引擎"
+  default_prompt: "使用 story-type-engine：基于项目事实比较十种故事类型，输出可审查的 Story Type Profile；不要擅自锁定主角、主题或结局。"
+  invocation: "implicit"

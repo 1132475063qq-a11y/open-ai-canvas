@@ -1,0 +1,5 @@
+interface:
+  display_name: "TVC策划与创意"
+  short_description: "用户提供品牌、产品或客户 Brief 并需要 TVC 策略与创意时使用"
+  default_prompt: "使用 tvc：先读取锁定事实和版本化输入，按本 Skill 的阶段门禁交付可追溯结果。"
+  invocation: "implicit"

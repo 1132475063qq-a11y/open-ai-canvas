@@ -1,0 +1,5 @@
+interface:
+  display_name: "剧本审查"
+  short_description: "用户要求独立检查剧本逻辑、人物、节奏或连续性时使用"
+  default_prompt: "使用 script-review：先读取锁定事实和版本化输入，按本 Skill 的阶段门禁交付可追溯结果。"
+  invocation: "implicit"

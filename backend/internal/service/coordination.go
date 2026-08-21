@@ -311,7 +311,16 @@ func (s *Service) AcquireChannelSlot(ctx context.Context, channelID string, fall
 }
 
 func (s *Service) ValidateRuntime() error {
-	return s.runtimeErr
+	if s.runtimeErr != nil {
+		return s.runtimeErr
+	}
+	if s.filmAgentRegistry == nil {
+		return errors.New("Film Agent Runtime 注册表未初始化")
+	}
+	if err := s.filmAgentRegistry.Validate(); err != nil {
+		return fmt.Errorf("Film Agent Runtime 注册表无效：%w", err)
+	}
+	return nil
 }
 
 func (s *Service) AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {

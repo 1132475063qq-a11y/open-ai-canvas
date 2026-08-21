@@ -1,0 +1,5 @@
+interface:
+  display_name: "LIRA 图像提示词"
+  short_description: "角色/场景/道具/编辑的图像模型路由与生产提示词优化"
+  default_prompt: "使用 lira-image-prompts：读取锁定视觉资产与目标图像任务，先区分生成/编辑/纹理/视角变化，再按项目提供的模型 profile 编译最小、正向、可追溯的图像提示词。"
+  invocation: "implicit"

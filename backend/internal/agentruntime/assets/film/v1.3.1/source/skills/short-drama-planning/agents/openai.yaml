@@ -1,0 +1,5 @@
+interface:
+  display_name: "短剧策划与分集"
+  short_description: "用户要把概念、小说或大纲规划为连续短剧和分集结构时使用"
+  default_prompt: "使用 short-drama-planning：先读取锁定事实和版本化输入，按本 Skill 的阶段门禁交付可追溯结果。"
+  invocation: "implicit"

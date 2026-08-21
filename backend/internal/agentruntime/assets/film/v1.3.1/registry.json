@@ -1,0 +1,531 @@
+{
+  "schemaVersion": "1.0",
+  "id": "film-agent-team",
+  "version": "1.3.1",
+  "domain": "film",
+  "expectedCounts": {
+    "agents": 9,
+    "skills": 17,
+    "intentRoutes": 15,
+    "handoffRoutes": 11
+  },
+  "agents": [
+    {
+      "id": "film_project_lead",
+      "instructionPath": "source/agents/film-project-lead.toml",
+      "skillIds": []
+    },
+    {
+      "id": "narrative_screenwriter",
+      "instructionPath": "source/agents/narrative-screenwriter.toml",
+      "skillIds": ["screenwriter", "worldbuilding-management", "character-acting-system"]
+    },
+    {
+      "id": "tvc_creative_director",
+      "instructionPath": "source/agents/tvc-creative-director.toml",
+      "skillIds": ["tvc"]
+    },
+    {
+      "id": "short_drama_planner",
+      "instructionPath": "source/agents/short-drama-planner.toml",
+      "skillIds": ["short-drama-planning", "story-type-engine", "worldbuilding-management", "continuity-check"]
+    },
+    {
+      "id": "director_storyboard_artist",
+      "instructionPath": "source/agents/director-storyboard-artist.toml",
+      "skillIds": ["director-storyboard", "character-acting-system", "continuity-check"]
+    },
+    {
+      "id": "visual_development_designer",
+      "instructionPath": "source/agents/visual-development-designer.toml",
+      "skillIds": ["character-visual-design", "scene-asset-design", "worldbuilding-management", "continuity-check", "lira-image-prompts"]
+    },
+    {
+      "id": "sound_designer",
+      "instructionPath": "source/agents/sound-designer.toml",
+      "skillIds": ["sound-design"]
+    },
+    {
+      "id": "ai_production_supervisor",
+      "instructionPath": "source/agents/ai-production-supervisor.toml",
+      "skillIds": ["ai-video-shot-prompt", "ai-production-feasibility-review", "continuity-check", "character-acting-system", "cinedance-video-director"]
+    },
+    {
+      "id": "quality_control_editor",
+      "instructionPath": "source/agents/quality-control-editor.toml",
+      "skillIds": ["script-review", "continuity-check", "ai-production-feasibility-review", "final-film-quality-review"],
+      "sandboxMode": "read-only"
+    }
+  ],
+  "skills": [
+    {
+      "id": "screenwriter",
+      "version": "2.1.0",
+      "instructionPath": "source/skills/screenwriter/SKILL.md",
+      "ownerAgentIds": ["narrative_screenwriter"]
+    },
+    {
+      "id": "story-type-engine",
+      "version": "3.1.0",
+      "instructionPath": "source/skills/story-type-engine/SKILL.md",
+      "ownerAgentIds": ["short_drama_planner"]
+    },
+    {
+      "id": "tvc",
+      "version": "2.0.0",
+      "instructionPath": "source/skills/tvc/SKILL.md",
+      "ownerAgentIds": ["tvc_creative_director"]
+    },
+    {
+      "id": "short-drama-planning",
+      "version": "2.0.0",
+      "instructionPath": "source/skills/short-drama-planning/SKILL.md",
+      "ownerAgentIds": ["short_drama_planner"]
+    },
+    {
+      "id": "script-review",
+      "version": "2.0.0",
+      "instructionPath": "source/skills/script-review/SKILL.md",
+      "ownerAgentIds": ["quality_control_editor"]
+    },
+    {
+      "id": "director-storyboard",
+      "version": "3.2.0",
+      "instructionPath": "source/skills/director-storyboard/SKILL.md",
+      "ownerAgentIds": ["director_storyboard_artist"]
+    },
+    {
+      "id": "ai-video-shot-prompt",
+      "version": "3.2.1",
+      "instructionPath": "source/skills/ai-video-shot-prompt/SKILL.md",
+      "ownerAgentIds": ["ai_production_supervisor"]
+    },
+    {
+      "id": "character-visual-design",
+      "version": "3.2.0",
+      "instructionPath": "source/skills/character-visual-design/SKILL.md",
+      "ownerAgentIds": ["visual_development_designer"]
+    },
+    {
+      "id": "scene-asset-design",
+      "version": "3.0.0",
+      "instructionPath": "source/skills/scene-asset-design/SKILL.md",
+      "ownerAgentIds": ["visual_development_designer"]
+    },
+    {
+      "id": "worldbuilding-management",
+      "version": "2.0.0",
+      "instructionPath": "source/skills/worldbuilding-management/SKILL.md",
+      "ownerAgentIds": ["narrative_screenwriter", "short_drama_planner", "visual_development_designer"]
+    },
+    {
+      "id": "continuity-check",
+      "version": "3.0.0",
+      "instructionPath": "source/skills/continuity-check/SKILL.md",
+      "ownerAgentIds": ["short_drama_planner", "director_storyboard_artist", "visual_development_designer", "ai_production_supervisor", "quality_control_editor"]
+    },
+    {
+      "id": "sound-design",
+      "version": "3.0.0",
+      "instructionPath": "source/skills/sound-design/SKILL.md",
+      "ownerAgentIds": ["sound_designer"]
+    },
+    {
+      "id": "ai-production-feasibility-review",
+      "version": "3.0.0",
+      "instructionPath": "source/skills/ai-production-feasibility-review/SKILL.md",
+      "ownerAgentIds": ["ai_production_supervisor", "quality_control_editor"]
+    },
+    {
+      "id": "final-film-quality-review",
+      "version": "3.0.0",
+      "instructionPath": "source/skills/final-film-quality-review/SKILL.md",
+      "ownerAgentIds": ["quality_control_editor"]
+    },
+    {
+      "id": "character-acting-system",
+      "version": "3.2.1",
+      "instructionPath": "source/skills/character-acting-system/SKILL.md",
+      "ownerAgentIds": ["narrative_screenwriter", "director_storyboard_artist", "ai_production_supervisor"]
+    },
+    {
+      "id": "cinedance-video-director",
+      "version": "3.2.1",
+      "instructionPath": "source/skills/cinedance-video-director/SKILL.md",
+      "ownerAgentIds": ["ai_production_supervisor"]
+    },
+    {
+      "id": "lira-image-prompts",
+      "version": "3.2.1",
+      "instructionPath": "source/skills/lira-image-prompts/SKILL.md",
+      "ownerAgentIds": ["visual_development_designer"]
+    }
+  ],
+  "artifactTypes": [
+    {"id": "project-requirements", "domain": "project", "responsible": "film_project_lead"},
+    {"id": "task", "domain": "orchestration", "responsible": "film_project_lead"},
+    {"id": "routing-decision", "domain": "orchestration", "responsible": "film_project_lead"},
+    {"id": "human-decision", "domain": "governance", "responsible": "film_project_lead"},
+    {"id": "story-type-profile", "domain": "narrative", "responsible": "short_drama_planner"},
+    {"id": "short-drama-plan", "domain": "narrative", "responsible": "short_drama_planner"},
+    {"id": "script", "domain": "narrative", "responsible": "narrative_screenwriter"},
+    {"id": "tvc-creative-brief", "domain": "brand", "responsible": "tvc_creative_director"},
+    {"id": "tvc-script", "domain": "brand", "responsible": "narrative_screenwriter"},
+    {"id": "canon-bible", "domain": "canon", "responsible": "narrative_screenwriter"},
+    {"id": "character-causal-bible", "domain": "character", "responsible": "narrative_screenwriter"},
+    {"id": "character-embodiment-bible", "domain": "character", "responsible": "visual_development_designer"},
+    {"id": "relationship-ledger", "domain": "character", "responsible": "narrative_screenwriter"},
+    {"id": "character-acting-profile", "domain": "character", "responsible": "narrative_screenwriter"},
+    {"id": "scene-acting-adaptation", "domain": "direction", "responsible": "director_storyboard_artist"},
+    {"id": "image-prompt-pack", "domain": "visual", "responsible": "visual_development_designer"},
+    {"id": "character-design", "domain": "visual", "responsible": "visual_development_designer"},
+    {"id": "scene-design", "domain": "visual", "responsible": "visual_development_designer"},
+    {"id": "visual-style-guide", "domain": "visual", "responsible": "visual_development_designer"},
+    {"id": "sound-design-plan", "domain": "sound", "responsible": "sound_designer"},
+    {"id": "storyboard", "domain": "direction", "responsible": "director_storyboard_artist"},
+    {"id": "shot-decision-sheet", "domain": "direction", "responsible": "director_storyboard_artist"},
+    {"id": "ai-video-prompts", "domain": "ai-production", "responsible": "ai_production_supervisor"},
+    {"id": "generation-attempt", "domain": "ai-production", "responsible": "ai_production_supervisor"},
+    {"id": "generation-result", "domain": "ai-production", "responsible": "ai_production_supervisor"},
+    {"id": "generation-qc-report", "domain": "ai-production", "responsible": "quality_control_editor"},
+    {"id": "production-feasibility-report", "domain": "ai-production", "responsible": "ai_production_supervisor"},
+    {"id": "script-review-report", "domain": "review", "responsible": "quality_control_editor"},
+    {"id": "continuity-report", "domain": "review", "responsible": "quality_control_editor"},
+    {"id": "qc-report", "domain": "review", "responsible": "quality_control_editor"},
+    {"id": "final-qc-report", "domain": "review", "responsible": "quality_control_editor"},
+    {"id": "project-summary", "domain": "project", "responsible": "film_project_lead"},
+    {"id": "asset-bible", "domain": "production", "responsible": "visual_development_designer"},
+    {"id": "scene-bible", "domain": "production", "responsible": "visual_development_designer"},
+    {"id": "shot-contract", "domain": "production", "responsible": "director_storyboard_artist"},
+    {"id": "continuity-ledger", "domain": "production", "responsible": "film_project_lead"},
+    {"id": "reference-lock-ledger", "domain": "production", "responsible": "visual_development_designer"},
+    {"id": "dependency-graph", "domain": "production", "responsible": "film_project_lead"},
+    {"id": "production-readiness-report", "domain": "production", "responsible": "film_project_lead"},
+    {"id": "style-bible", "domain": "production", "responsible": "visual_development_designer"},
+    {"id": "shot-package", "domain": "production", "responsible": "ai_production_supervisor"},
+    {"id": "prompt-manifest", "domain": "production", "responsible": "ai_production_supervisor"},
+    {"id": "shot-feasibility-report", "domain": "production", "responsible": "ai_production_supervisor"},
+    {"id": "media-qc-report", "domain": "production", "responsible": "quality_control_editor"},
+    {"id": "rework-event", "domain": "production", "responsible": "ai_production_supervisor"},
+    {"id": "impact-analysis", "domain": "production", "responsible": "film_project_lead"}
+  ],
+  "artifactAliases": {
+    "worldbuilding-bible": "canon-bible",
+    "character-bible": "character-causal-bible",
+    "visual-asset": "character-design",
+    "ai-prompts": "ai-video-prompts",
+    "feasibility": "production-feasibility-report",
+    "feasibility-report": "production-feasibility-report",
+    "sound": "sound-design-plan",
+    "script-review": "script-review-report",
+    "continuity": "continuity-report",
+    "qc": "qc-report",
+    "execution-summary": "project-summary",
+    "input": "project-requirements",
+    "series-plan": "short-drama-plan",
+    "world-knowledge": "canon-bible",
+    "episode-script": "script",
+    "project-brief": "project-requirements",
+    "world-bible": "canon-bible"
+  },
+  "intentRoutes": [
+    {
+      "id": "IR-01",
+      "name": "原创短片故事",
+      "triggerPhrases": ["写一个原创短片故事", "创作短片剧本", "做一个短片故事"],
+      "primaryAgentId": "narrative_screenwriter",
+      "skillIds": ["screenwriter"],
+      "requiredInputArtifactTypes": [],
+      "optionalInputArtifactTypes": ["project-requirements"],
+      "outputArtifactTypes": ["script"]
+    },
+    {
+      "id": "IR-02",
+      "name": "TVC策略",
+      "triggerPhrases": ["做一个TVC策略", "品牌广告创意", "产品TVC"],
+      "primaryAgentId": "tvc_creative_director",
+      "skillIds": ["tvc"],
+      "requiredInputArtifactTypes": ["project-requirements"],
+      "optionalInputArtifactTypes": [],
+      "outputArtifactTypes": ["tvc-creative-brief"]
+    },
+    {
+      "id": "IR-03",
+      "name": "故事型TVC",
+      "triggerPhrases": ["故事型TVC剧本", "广告讲一个故事", "微电影广告"],
+      "primaryAgentId": "tvc_creative_director",
+      "candidateAgentIds": ["tvc_creative_director", "narrative_screenwriter"],
+      "skillIds": ["tvc", "screenwriter"],
+      "requiredInputArtifactTypes": ["project-requirements"],
+      "optionalInputArtifactTypes": ["tvc-creative-brief"],
+      "outputArtifactTypes": ["tvc-script"]
+    },
+    {
+      "id": "IR-04",
+      "name": "小说改短剧",
+      "triggerPhrases": ["小说改编成短剧", "改成多集短剧", "小说改编策划"],
+      "primaryAgentId": "short_drama_planner",
+      "skillIds": ["short-drama-planning"],
+      "requiredInputArtifactTypes": ["project-requirements"],
+      "optionalInputArtifactTypes": [],
+      "outputArtifactTypes": ["short-drama-plan"]
+    },
+    {
+      "id": "IR-05",
+      "name": "写单集剧本",
+      "triggerPhrases": ["写这一集剧本", "写第几集剧本", "基于大纲写剧本"],
+      "primaryAgentId": "narrative_screenwriter",
+      "skillIds": ["screenwriter"],
+      "requiredInputArtifactTypes": [],
+      "optionalInputArtifactTypes": ["short-drama-plan", "canon-bible", "project-requirements"],
+      "outputArtifactTypes": ["script"]
+    },
+    {
+      "id": "IR-06",
+      "name": "检查剧本",
+      "triggerPhrases": ["审查这个剧本", "检查剧本连续性", "剧本专业审查"],
+      "primaryAgentId": "quality_control_editor",
+      "skillIds": ["script-review"],
+      "requiredInputArtifactTypes": ["script"],
+      "optionalInputArtifactTypes": [],
+      "outputArtifactTypes": ["script-review-report"]
+    },
+    {
+      "id": "IR-07",
+      "name": "做分镜",
+      "triggerPhrases": ["把剧本做成分镜", "设计镜头", "生成分镜表"],
+      "primaryAgentId": "director_storyboard_artist",
+      "skillIds": ["director-storyboard"],
+      "requiredInputArtifactTypes": ["script"],
+      "optionalInputArtifactTypes": [],
+      "outputArtifactTypes": ["storyboard", "shot-decision-sheet"]
+    },
+    {
+      "id": "IR-08",
+      "name": "视频生成提示词",
+      "triggerPhrases": ["生成视频提示词", "分镜转视频Prompt", "逐镜视频提示词"],
+      "primaryAgentId": "ai_production_supervisor",
+      "skillIds": ["ai-video-shot-prompt"],
+      "requiredInputArtifactTypes": ["storyboard"],
+      "optionalInputArtifactTypes": ["character-design", "scene-design", "visual-style-guide"],
+      "outputArtifactTypes": ["ai-video-prompts", "prompt-manifest"]
+    },
+    {
+      "id": "IR-09",
+      "name": "角色设计",
+      "triggerPhrases": ["设计角色", "生成角色卡", "人物三视图"],
+      "primaryAgentId": "visual_development_designer",
+      "skillIds": ["character-visual-design"],
+      "requiredInputArtifactTypes": ["script"],
+      "optionalInputArtifactTypes": ["storyboard", "canon-bible"],
+      "outputArtifactTypes": ["character-design", "asset-bible"]
+    },
+    {
+      "id": "IR-10",
+      "name": "场景设计",
+      "triggerPhrases": ["设计场景", "生成场景资产", "建立空间设定"],
+      "primaryAgentId": "visual_development_designer",
+      "skillIds": ["scene-asset-design"],
+      "requiredInputArtifactTypes": ["script", "storyboard"],
+      "optionalInputArtifactTypes": ["canon-bible"],
+      "outputArtifactTypes": ["scene-design", "scene-bible"]
+    },
+    {
+      "id": "IR-11",
+      "name": "世界观",
+      "triggerPhrases": ["建立世界观", "管理世界设定", "视觉世界观"],
+      "primaryAgentId": "narrative_screenwriter",
+      "candidateAgentIds": ["narrative_screenwriter", "visual_development_designer"],
+      "skillIds": ["worldbuilding-management"],
+      "requiredInputArtifactTypes": [],
+      "optionalInputArtifactTypes": ["script", "project-requirements"],
+      "outputArtifactTypes": ["canon-bible"],
+      "requiresDisambiguation": true
+    },
+    {
+      "id": "IR-12",
+      "name": "连续性检查",
+      "triggerPhrases": ["检查连续性", "查找前后矛盾", "跨场景一致性"],
+      "primaryAgentId": "quality_control_editor",
+      "skillIds": ["continuity-check"],
+      "requiredInputArtifactTypes": [],
+      "optionalInputArtifactTypes": ["script", "storyboard", "character-design", "scene-design", "canon-bible"],
+      "outputArtifactTypes": ["continuity-report", "continuity-ledger"]
+    },
+    {
+      "id": "IR-13",
+      "name": "声音方案",
+      "triggerPhrases": ["设计声音方案", "做声音设计", "规划对白音乐音效"],
+      "primaryAgentId": "sound_designer",
+      "skillIds": ["sound-design"],
+      "requiredInputArtifactTypes": ["storyboard"],
+      "optionalInputArtifactTypes": ["script", "visual-style-guide"],
+      "outputArtifactTypes": ["sound-design-plan"]
+    },
+    {
+      "id": "IR-14",
+      "name": "制作可行性",
+      "triggerPhrases": ["评估制作可行性", "判断生成风险", "制作降级方案"],
+      "primaryAgentId": "ai_production_supervisor",
+      "skillIds": ["ai-production-feasibility-review"],
+      "requiredInputArtifactTypes": ["storyboard"],
+      "optionalInputArtifactTypes": ["character-design", "scene-design", "sound-design-plan"],
+      "outputArtifactTypes": ["production-feasibility-report", "shot-feasibility-report"]
+    },
+    {
+      "id": "IR-15",
+      "name": "成片审查",
+      "triggerPhrases": ["审查成片", "检查最终视频", "最终质量验收"],
+      "primaryAgentId": "quality_control_editor",
+      "skillIds": ["final-film-quality-review"],
+      "requiredInputArtifactTypes": ["production-feasibility-report", "generation-result"],
+      "optionalInputArtifactTypes": ["script", "storyboard", "character-design", "scene-design", "sound-design-plan"],
+      "outputArtifactTypes": ["final-qc-report", "media-qc-report"]
+    }
+  ],
+  "handoffRoutes": [
+    {
+      "id": "HR-01",
+      "name": "短剧策划交接编剧",
+      "fromAgentIds": ["short_drama_planner"],
+      "toAgentIds": ["narrative_screenwriter"],
+      "skillIds": ["screenwriter"],
+      "inputArtifactTypes": ["short-drama-plan"],
+      "outputArtifactTypes": ["script"],
+      "messageType": "request",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    },
+    {
+      "id": "HR-02",
+      "name": "TVC创意交接编剧",
+      "fromAgentIds": ["tvc_creative_director"],
+      "toAgentIds": ["narrative_screenwriter"],
+      "skillIds": ["screenwriter"],
+      "inputArtifactTypes": ["tvc-creative-brief"],
+      "outputArtifactTypes": ["tvc-script"],
+      "messageType": "request",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    },
+    {
+      "id": "HR-03",
+      "name": "锁定剧本交接导演分镜",
+      "fromAgentIds": ["narrative_screenwriter"],
+      "toAgentIds": ["director_storyboard_artist"],
+      "skillIds": ["director-storyboard"],
+      "inputArtifactTypes": ["script", "tvc-script"],
+      "outputArtifactTypes": ["storyboard", "shot-decision-sheet"],
+      "messageType": "completion_notification",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    },
+    {
+      "id": "HR-04",
+      "name": "分镜交接视觉开发",
+      "fromAgentIds": ["director_storyboard_artist"],
+      "toAgentIds": ["visual_development_designer"],
+      "skillIds": ["character-visual-design", "scene-asset-design"],
+      "inputArtifactTypes": ["storyboard"],
+      "outputArtifactTypes": ["character-design", "scene-design", "visual-style-guide"],
+      "messageType": "request",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "parallel"
+    },
+    {
+      "id": "HR-05",
+      "name": "分镜交接声音设计",
+      "fromAgentIds": ["director_storyboard_artist"],
+      "toAgentIds": ["sound_designer"],
+      "skillIds": ["sound-design"],
+      "inputArtifactTypes": ["script", "storyboard"],
+      "outputArtifactTypes": ["sound-design-plan"],
+      "messageType": "request",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "parallel"
+    },
+    {
+      "id": "HR-06",
+      "name": "视觉开发交接制作监督",
+      "fromAgentIds": ["visual_development_designer"],
+      "toAgentIds": ["ai_production_supervisor"],
+      "skillIds": ["ai-production-feasibility-review"],
+      "inputArtifactTypes": ["character-design", "scene-design", "visual-style-guide"],
+      "outputArtifactTypes": ["production-feasibility-report"],
+      "messageType": "notification",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "parallel"
+    },
+    {
+      "id": "HR-07",
+      "name": "声音设计交接制作监督",
+      "fromAgentIds": ["sound_designer"],
+      "toAgentIds": ["ai_production_supervisor"],
+      "skillIds": ["ai-production-feasibility-review"],
+      "inputArtifactTypes": ["sound-design-plan"],
+      "outputArtifactTypes": ["production-feasibility-report"],
+      "messageType": "notification",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "parallel"
+    },
+    {
+      "id": "HR-08",
+      "name": "制作监督交接质量审查",
+      "fromAgentIds": ["ai_production_supervisor"],
+      "toAgentIds": ["quality_control_editor"],
+      "skillIds": ["continuity-check"],
+      "inputArtifactTypes": ["production-feasibility-report", "storyboard", "character-design", "scene-design", "sound-design-plan"],
+      "outputArtifactTypes": ["qc-report"],
+      "messageType": "notification",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    },
+    {
+      "id": "HR-09",
+      "name": "质量审查交接项目收口",
+      "fromAgentIds": ["quality_control_editor"],
+      "toAgentIds": ["film_project_lead"],
+      "skillIds": [],
+      "inputArtifactTypes": ["qc-report", "final-qc-report"],
+      "outputArtifactTypes": ["project-summary"],
+      "messageType": "completion_notification",
+      "executionMode": "orchestration",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    },
+    {
+      "id": "HR-10",
+      "name": "项目负责人启动专业任务",
+      "fromAgentIds": ["film_project_lead"],
+      "toAgentIds": ["narrative_screenwriter", "tvc_creative_director", "short_drama_planner", "director_storyboard_artist", "visual_development_designer", "sound_designer", "ai_production_supervisor", "quality_control_editor"],
+      "skillIds": [],
+      "inputArtifactTypes": ["project-requirements"],
+      "outputArtifactTypes": ["task", "routing-decision"],
+      "messageType": "request",
+      "executionMode": "orchestration",
+      "requiresLockedInput": false,
+      "fanout": "dynamic"
+    },
+    {
+      "id": "HR-11",
+      "name": "专业任务回到项目负责人收口",
+      "fromAgentIds": ["narrative_screenwriter", "tvc_creative_director", "short_drama_planner", "director_storyboard_artist", "visual_development_designer", "sound_designer", "ai_production_supervisor", "quality_control_editor"],
+      "toAgentIds": ["film_project_lead"],
+      "skillIds": [],
+      "inputArtifactTypes": ["script", "tvc-creative-brief", "tvc-script", "short-drama-plan", "storyboard", "character-design", "scene-design", "sound-design-plan", "production-feasibility-report", "qc-report", "final-qc-report"],
+      "outputArtifactTypes": ["project-summary"],
+      "messageType": "completion_notification",
+      "executionMode": "orchestration",
+      "requiresLockedInput": true,
+      "fanout": "dynamic"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+interface:
+  display_name: "ACTING 角色表演系统"
+  short_description: "把角色心理编译为可拍摄、可生成的行为与逐场表演适配"
+  default_prompt: "使用 character-acting-system：先锁定角色目标/障碍/策略与长期行为档案，再把本场状态改写为可观察身体、眼神、呼吸、节拍和对白行为；不直接写抽象情绪。"
+  invocation: "implicit"

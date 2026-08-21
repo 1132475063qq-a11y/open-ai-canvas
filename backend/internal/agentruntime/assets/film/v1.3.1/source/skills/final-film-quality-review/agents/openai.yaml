@@ -1,0 +1,5 @@
+interface:
+  display_name: "成片质量审查"
+  short_description: "已有成片、粗剪、样片或逐镜头结果需要验收时使用"
+  default_prompt: "使用 final-film-quality-review：先读取锁定事实和版本化输入，按本 Skill 的阶段门禁交付可追溯结果。"
+  invocation: "implicit"

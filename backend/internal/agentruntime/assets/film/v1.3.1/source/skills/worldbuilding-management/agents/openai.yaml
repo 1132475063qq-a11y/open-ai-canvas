@@ -1,0 +1,5 @@
+interface:
+  display_name: "世界观与设定管理"
+  short_description: "项目需要建立或变更世界规则、制度、历史和角色知识边界时使用"
+  default_prompt: "使用 worldbuilding-management：先读取锁定事实和版本化输入，按本 Skill 的阶段门禁交付可追溯结果。"
+  invocation: "implicit"

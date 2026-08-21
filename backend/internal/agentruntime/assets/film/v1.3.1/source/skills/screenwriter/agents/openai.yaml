@@ -1,0 +1,5 @@
+interface:
+  display_name: "编剧"
+  short_description: "用户要原创、改编、修订故事或剧本时使用"
+  default_prompt: "使用 screenwriter：先读取锁定事实和版本化输入，按本 Skill 的阶段门禁交付可追溯结果。"
+  invocation: "implicit"

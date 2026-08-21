@@ -1,0 +1,5 @@
+interface:
+  display_name: "场景资产设计"
+  short_description: "场景或道具需成为空间稳定、可复用设计资产时使用"
+  default_prompt: "使用 scene-asset-design：先读取锁定事实和版本化输入，按本 Skill 的阶段门禁交付可追溯结果。"
+  invocation: "implicit"
