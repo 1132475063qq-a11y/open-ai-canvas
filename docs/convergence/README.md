@@ -18,7 +18,7 @@ corresponding project workspace.
 
 | Role                    | Location                                                                 | Revision                                           | Policy                                                          |
 | ----------------------- | ------------------------------------------------------------------------ | -------------------------------------------------- | --------------------------------------------------------------- |
-| Product mainline        | `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`                      | current `f478fb5` (IR-01 code `60a5463`)                        | Modify here                                                     |
+| Product mainline        | `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`                      | current branch tip; code integration `60a5463`                  | Modify here                                                     |
 | Mainline branch         | same repository                                                          | `codex/converged-runtime`                          | All convergence work; push to `handoff/codex/converged-runtime` |
 | Baseline tag            | same repository                                                          | `baseline/upstream-1635927-20260821`               | Never move                                                      |
 | Historical checkout     | `/Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas`       | `faa60e3` ancestor; stale checkout                 | Read only; do not use as the convergence mainline                |

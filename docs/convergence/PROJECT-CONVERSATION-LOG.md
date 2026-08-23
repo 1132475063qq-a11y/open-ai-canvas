@@ -11,7 +11,7 @@
 当前 Git 状态：
 
 - 分支：`codex/converged-runtime`
-- HEAD：`f478fb573fadaafeeff0e17be3726b9f63d65b95`
+- HEAD：以 `git rev-parse HEAD` 为准；代码集成提交为 `60a5463`
 - GitHub 交接远程：`https://github.com/1132475063qq-a11y/open-ai-canvas.git`
 - 交接分支：`codex/converged-runtime`
 - 作者上游：`https://github.com/ddcat-ai/open-ai-canvas.git`
