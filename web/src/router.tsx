@@ -4,7 +4,7 @@ import { createBrowserRouter, Navigate, Outlet } from "react-router";
 import { RequireAuth } from "@/components/auth/require-auth";
 import { RequireFeature } from "@/components/auth/require-feature";
 import { FullScreenLoader, WorkspaceRouteLoader } from "@/components/ui/aceternity/full-screen-loader";
-import { loadAssetsPage, loadCanvasPage, loadCreatePage, loadProjectsPage, loadWalletPage } from "@/lib/workspace-route-modules";
+import { loadAssetsPage, loadCanvasPage, loadCreatePage, loadEcommercePage, loadProjectsPage, loadWalletPage } from "@/lib/workspace-route-modules";
 import UserLayout from "@/layouts/user-layout";
 import { AuthScene } from "@/pages/auth/auth-scene";
 import RouteErrorPage from "@/pages/route-error";
@@ -34,6 +34,7 @@ const CanvasPage = lazy(loadCanvasPage);
 const CanvasProjectPage = lazy(() => import("@/pages/canvas/project"));
 const SharedCanvasPage = lazy(() => import("@/pages/canvas/shared"));
 const CreatePage = lazy(loadCreatePage);
+const EcommercePage = lazy(loadEcommercePage);
 const HomePage = lazy(() => import("@/pages/home"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 const SkillsPage = lazy(() => import("@/pages/skills"));
@@ -76,6 +77,7 @@ export const router = createBrowserRouter([
         children: [
             { path: "/", element: <Navigate to="/create" replace /> },
             { path: "/create", element: <RequireAuth>{deferred(<CreatePage />)}</RequireAuth> },
+            { path: "/ecommerce", element: <RequireAuth>{deferred(<EcommercePage />)}</RequireAuth> },
             { path: "/home", element: deferred(<HomePage />) },
             {
                 path: "/tasks",
@@ -109,7 +111,7 @@ export const router = createBrowserRouter([
                 path: "/projects/:projectId",
                 element: (
                     <RequireAuth>
-                        <RequireFeature feature="shortDramaEnabled">{deferred(<ProjectDetailPage />)}</RequireFeature>
+                        {deferred(<ProjectDetailPage />)}
                     </RequireAuth>
                 ),
             },
@@ -117,7 +119,7 @@ export const router = createBrowserRouter([
                 path: "/projects/:projectId/:view",
                 element: (
                     <RequireAuth>
-                        <RequireFeature feature="shortDramaEnabled">{deferred(<ProjectDetailPage />)}</RequireFeature>
+                        {deferred(<ProjectDetailPage />)}
                     </RequireAuth>
                 ),
             },
@@ -125,7 +127,7 @@ export const router = createBrowserRouter([
                 path: "/projects/:projectId/chapters/:chapterId",
                 element: (
                     <RequireAuth>
-                        <RequireFeature feature="shortDramaEnabled">{deferred(<ProjectDetailPage />)}</RequireFeature>
+                        {deferred(<ProjectDetailPage />)}
                     </RequireAuth>
                 ),
             },

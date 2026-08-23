@@ -1,4 +1,5 @@
 import { apiClient, request } from "@/services/api/request";
+import type { GenerationTask } from "@/services/api/task-center";
 
 const api = apiClient;
 
@@ -52,6 +53,7 @@ export type ProjectAsset = {
     title: string;
     mediaType: string;
     category: string;
+    projectRole?: string;
     status: string;
     primaryVersionId?: string;
     versionCount: number;
@@ -63,6 +65,314 @@ export type ProjectAsset = {
     updatedAt: string;
     character?: CharacterCardSummary;
 };
+
+export type EcommerceArtifact = {
+    id: string;
+    projectId: string;
+    artifactKey: string;
+    artifactType: string;
+    schemaVersion: number;
+    revision: number;
+    lifecycle: "draft" | "review" | "finalized" | "superseded" | "archived" | string;
+    evidence: "recorded" | "inferred" | "unknown" | string;
+    responsibleAgentId?: string;
+    skillRef?: string;
+    payloadJson: string;
+    sourceRefsJson: string;
+    authorityRefsJson: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type EcommerceKernel = "MODEL_INTERACTION" | "STILL_LIFE";
+
+export type EcommerceShotCameraSpec = {
+    azimuth: string;
+    elevation: string;
+    cameraHeight: string;
+    lens: string;
+    distance: string;
+    subjectRegion: string;
+    subjectFill: string;
+    pose: string;
+    composition: string;
+    avoidReuseOf?: string[];
+};
+
+export type EcommercePresetShotRole = {
+    key: string;
+    title: string;
+    framing: string;
+    direction: string;
+    interaction: string;
+    durationMs: number;
+    camera: EcommerceShotCameraSpec;
+};
+
+export type EcommercePresetConstraints = {
+    productFidelity: string[];
+    identitySafety: string[];
+    commercial: string[];
+    cost: string[];
+};
+
+export type EcommercePresetDefinition = {
+    schemaVersion: number;
+    skillRef: string;
+    kernel: EcommerceKernel;
+    supportedCategories: string[];
+    sceneTemplate: string;
+    interactionTemplate: string;
+    shotRoles: EcommercePresetShotRole[];
+    requiredConstraints: EcommercePresetConstraints;
+    negativePrompt: string;
+};
+
+export type EcommercePreset = {
+    id: string;
+    presetKey: string;
+    version: number;
+    name: string;
+    kernel: EcommerceKernel;
+    category: string;
+    description: string;
+    system: boolean;
+    sourceId?: string;
+    definition: EcommercePresetDefinition;
+    updatedAt: string;
+};
+
+export type EcommercePresetCatalog = {
+    schemaVersion: number;
+    system: EcommercePreset[];
+    custom: EcommercePreset[];
+};
+
+export type EcommerceProviderRoute = {
+    channelId: string;
+    channelName: string;
+    channelModelId: string;
+    model: string;
+    modelDisplayName: string;
+    protocol: string;
+    billingMode: string;
+    unitPriceMicrocredits?: number;
+    priceVersion: number;
+    capabilityVersion: number;
+    maxReferenceImages: number;
+    supportsImageEdit: boolean;
+    providerReady: boolean;
+    billingReady: boolean;
+    routeReady: boolean;
+    blockers: string[];
+};
+
+export type EcommerceQuote = {
+    fingerprint: string;
+    expiresAt: string;
+    channelId: string;
+    channelModelId: string;
+    model: string;
+    resolution?: string;
+    pixelSize?: string;
+    priceVersion: number;
+    unitMicrocredits: number;
+    count: number;
+    totalMicrocredits: number;
+};
+
+export type EcommerceProductionRun = {
+    id: string;
+    userId: string;
+    projectId: string;
+    idempotencyKey: string;
+    status: "planning" | "awaiting_review" | "awaiting_cost" | "generating" | "qa" | "needs_you" | "ready" | "failed" | "cancelled" | string;
+    kernel: EcommerceKernel;
+    category: string;
+    presetId: string;
+    presetVersion: number;
+    targetChannel: string;
+    aspectRatio: string;
+    resolution?: string;
+    pixelSize?: string;
+    outputCount: number;
+    reviewBeforeGeneration: boolean;
+    productAssetIdsJson: string;
+    supportingAssetIdsJson: string;
+    modelAssetIdsJson: string;
+    sceneAssetIdsJson: string;
+    brandAssetIdsJson: string;
+    userGoal: string;
+    modelMode: string;
+    modelBrief: string;
+    sceneBrief: string;
+    brandBrief: string;
+    advancedJson: string;
+    productDnaArtifactId: string;
+    modelProfileArtifactId?: string;
+    scenePackArtifactId: string;
+    presetSnapshotArtifactId: string;
+    generationRequestArtifactId: string;
+    motionPlanArtifactId?: string;
+    videoSequenceArtifactId?: string;
+    quoteFingerprint?: string;
+    quoteExpiresAt?: string;
+    quoteChannelId?: string;
+    quoteChannelModelId?: string;
+    quoteModel?: string;
+    quotePriceVersion?: number;
+    quoteUnitMicrocredits?: number;
+    quoteTotalMicrocredits?: number;
+    error?: string;
+    submittedAt?: string;
+    completedAt?: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type EcommerceProductionSlot = {
+    id: string;
+    userId: string;
+    projectId: string;
+    runId: string;
+    position: number;
+    role: string;
+    title: string;
+    cameraJson: string;
+    prompt: string;
+    negativePrompt: string;
+    status: "planned" | "scheduled" | "queued" | "running" | "qa" | "accepted" | "failed" | "cancelled" | string;
+    qaStatus: "PENDING" | "PASS" | "UNCERTAIN" | "FAIL" | string;
+    qaIssuesJson: string;
+    qaNote: string;
+    accepted: boolean;
+    acceptedAttemptId?: string;
+    acceptedAt?: string;
+    activeAttemptId?: string;
+    activeTaskId?: string;
+    resultUrl?: string;
+    resultPayloadJson?: string;
+    compositionHash?: string;
+    compositionHashAlgorithm?: string;
+    duplicateOfSlotId?: string;
+    compositionDistance?: number;
+    regenerationReason?: string;
+    generatedAssetId?: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type EcommerceProductionAttempt = {
+    id: string;
+    userId: string;
+    projectId: string;
+    runId: string;
+    slotId: string;
+    attemptNumber: number;
+    kind: "initial" | "retry" | "repair" | "variation" | string;
+    status: string;
+    prompt: string;
+    negativePrompt: string;
+    quoteFingerprint?: string;
+    quoteExpiresAt?: string;
+    quoteChannelId?: string;
+    quoteChannelModelId?: string;
+    quoteModel?: string;
+    quotePriceVersion?: number;
+    quoteAmountMicrocredits?: number;
+    taskId?: string;
+    billingOrderId?: string;
+    providerRequestId?: string;
+    resultId?: string;
+    generatedAssetArtifactId?: string;
+    resultUrl?: string;
+    resultPayloadJson?: string;
+    error?: string;
+    startedAt?: string;
+    completedAt?: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type EcommerceQADimensionAssessment = {
+    key: string;
+    score?: number | null;
+    verdict: "PASS" | "UNCERTAIN" | "FAIL" | "NOT_APPLICABLE" | string;
+    note?: string;
+};
+
+export type EcommerceQARuntimeEvidence = {
+    source: string;
+    attemptId: string;
+    attemptStatus: string;
+    taskId?: string;
+    taskStatus?: string;
+    resultId: string;
+    providerRequestRecorded: boolean;
+    billingRecorded: boolean;
+    latencyMs?: number;
+    apiStabilityScore: number;
+    apiStabilityVerdict: "PASS" | "UNCERTAIN" | "FAIL" | string;
+};
+
+export type EcommerceQAReview = {
+    artifactId: string;
+    revision: number;
+    schemaVersion: number;
+    reviewId: string;
+    runId: string;
+    slotId: string;
+    attemptId: string;
+    resultId: string;
+    decision: "PASS" | "UNCERTAIN" | "FAIL" | string;
+    action: "accept" | "hold" | "reject" | string;
+    issueCodes: string[];
+    note?: string;
+    dimensions: EcommerceQADimensionAssessment[];
+    runtimeEvidence: EcommerceQARuntimeEvidence;
+    reviewerUserId: string;
+    source: string;
+    reviewedAt: string;
+};
+
+export type EcommerceAttemptView = { attempt: EcommerceProductionAttempt; task?: GenerationTask };
+export type EcommerceSlotView = { slot: EcommerceProductionSlot; attempts: EcommerceAttemptView[]; reviews: EcommerceQAReview[] };
+export type EcommerceRunView = { run: EcommerceProductionRun; quote?: EcommerceQuote; slots: EcommerceSlotView[]; routes: EcommerceProviderRoute[] };
+export type EcommerceWorkspace = {
+    schemaVersion: number;
+    artifacts: EcommerceArtifact[];
+    presets: EcommercePresetCatalog;
+    providerRoutes: EcommerceProviderRoute[];
+    runs: EcommerceProductionRun[];
+    activeRun?: EcommerceRunView;
+};
+
+export type CreateEcommerceRunInput = {
+    idempotencyKey: string;
+    productAssetIds: string[];
+    supportingAssetIds?: string[];
+    modelAssetIds?: string[];
+    sceneAssetIds?: string[];
+    brandAssetIds?: string[];
+    presetId: string;
+    category: string;
+    targetChannel: string;
+    aspectRatio: string;
+    resolution: "1k" | "2k" | "4k";
+    outputCount: number;
+    reviewBeforeGeneration: boolean;
+    userGoal?: string;
+    modelMode?: "ai" | "uploaded" | "none";
+    modelBrief?: string;
+    sceneBrief?: string;
+    brandBrief?: string;
+    productFacts?: Record<string, unknown>;
+    advanced?: Record<string, unknown>;
+    channelId?: string;
+    model?: string;
+};
+
+export type EcommerceRetryResponse = { attempt: EcommerceProductionAttempt; quote?: EcommerceQuote; run?: EcommerceRunView };
 
 export type ProjectAssetFolder = {
     id: string;
@@ -179,6 +489,7 @@ export type ProjectDetail = {
     assetFolders: ProjectAssetFolder[];
     workflows: ProjectWorkflow[];
     shots: ProjectShot[];
+    ecommerceArtifacts?: EcommerceArtifact[];
     shotReferences: ShotAssetReference[];
     assetCandidates: ProjectAssetCandidate[];
 };
@@ -239,7 +550,7 @@ export function unlinkCanvasProject(projectId: string, canvasId: string) {
     return request<{ canvasId: string }>(api.delete(`/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasId)}`));
 }
 
-export function linkProjectAsset(projectId: string, input: { assetId: string; category: string; folderId?: string }, signal?: AbortSignal) {
+export function linkProjectAsset(projectId: string, input: { assetId: string; category: string; folderId?: string; role?: string }, signal?: AbortSignal) {
     return request<{ asset: ProjectAsset }>(api.post(`/projects/${encodeURIComponent(projectId)}/assets`, input, { signal }));
 }
 
@@ -249,6 +560,10 @@ export function unlinkProjectAsset(projectId: string, assetId: string) {
 
 export function updateProjectAssetCategory(projectId: string, assetId: string, category: string, signal?: AbortSignal) {
     return request<{ asset: ProjectAsset }>(api.patch(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`, { category }, { signal }));
+}
+
+export function updateProjectAssetRole(projectId: string, assetId: string, role: string) {
+    return request<{ asset: ProjectAsset }>(api.patch(`/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`, { role }));
 }
 
 export function moveProjectAsset(projectId: string, assetId: string, folderId: string, signal?: AbortSignal) {
@@ -333,4 +648,97 @@ export function updateWorkflowStep(projectId: string, stepId: string, input: { s
 
 export function registerProjectTaskOutput(projectId: string, stepId: string, input: { taskId: string; assetVersionId?: string; resourceId?: string; mediaType?: string; role?: string; metadataJson?: string; outputJson?: string }) {
     return request<{ step: WorkflowStep }>(api.post(`/projects/${encodeURIComponent(projectId)}/workflow-steps/${encodeURIComponent(stepId)}/task-output`, input));
+}
+
+export function listProjectEcommerceArtifacts(projectId: string) {
+    return request<{ artifacts: EcommerceArtifact[] }>(api.get(`/projects/${encodeURIComponent(projectId)}/ecommerce-artifacts`));
+}
+
+export function saveProjectEcommerceArtifact(
+    projectId: string,
+    input: {
+        artifactKey: string;
+        artifactType: string;
+        schemaVersion: number;
+        lifecycle?: EcommerceArtifact["lifecycle"];
+        evidence?: EcommerceArtifact["evidence"];
+        responsibleAgentId?: string;
+        skillRef?: string;
+        payload: Record<string, unknown>;
+        sourceRefs: string[];
+        authorityRefs?: string[];
+    },
+) {
+    return request<{ artifact: EcommerceArtifact }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce-artifacts`, input));
+}
+
+export function getProjectEcommerceWorkspace(projectId: string) {
+    return request<{ workspace: EcommerceWorkspace }>(api.get(`/projects/${encodeURIComponent(projectId)}/ecommerce/workspace`));
+}
+
+export function listProjectEcommercePresets(projectId: string) {
+    return request<{ presets: EcommercePresetCatalog }>(api.get(`/projects/${encodeURIComponent(projectId)}/ecommerce/presets`));
+}
+
+export function saveProjectEcommercePreset(projectId: string, input: { sourceId: string; presetKey?: string; name?: string; description?: string; definition?: EcommercePresetDefinition }) {
+    return request<{ preset: EcommercePreset }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce/presets`, input));
+}
+
+export function createProjectEcommerceRun(projectId: string, input: CreateEcommerceRunInput) {
+    return request<{ run: EcommerceRunView }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce/runs`, input));
+}
+
+export function getProjectEcommerceRun(projectId: string, runId: string) {
+    return request<{ run: EcommerceRunView }>(api.get(`/projects/${encodeURIComponent(projectId)}/ecommerce/runs/${encodeURIComponent(runId)}`));
+}
+
+export function refreshProjectEcommerceRunQuote(projectId: string, runId: string, input: { channelId: string; model: string }) {
+    return request<{ run: EcommerceRunView }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce/runs/${encodeURIComponent(runId)}/quote`, input));
+}
+
+export function approveProjectEcommerceRun(projectId: string, runId: string) {
+    return request<{ run: EcommerceRunView }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce/runs/${encodeURIComponent(runId)}/approve`));
+}
+
+export function submitProjectEcommerceRun(projectId: string, runId: string, quoteFingerprint: string) {
+    return request<{ run: EcommerceRunView }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce/runs/${encodeURIComponent(runId)}/submit`, { quoteFingerprint }));
+}
+
+export function cancelProjectEcommerceRun(projectId: string, runId: string) {
+    return request<{ run: EcommerceRunView }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce/runs/${encodeURIComponent(runId)}/cancel`));
+}
+
+export function retryProjectEcommerceSlot(
+    projectId: string,
+    runId: string,
+    slotId: string,
+    input: { attemptId?: string; quoteFingerprint?: string; kind?: "retry" | "repair" | "variation"; promptPatch?: string; channelId?: string; model?: string },
+) {
+    return request<{ retry: EcommerceRetryResponse }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce/runs/${encodeURIComponent(runId)}/slots/${encodeURIComponent(slotId)}/retry`, input));
+}
+
+export function reviewProjectEcommerceSlot(
+    projectId: string,
+    runId: string,
+    slotId: string,
+    input: {
+        reviewId: string;
+        attemptId: string;
+        resultId: string;
+        decision: "PASS" | "UNCERTAIN" | "FAIL";
+        action: "accept" | "hold" | "reject";
+        issueCodes?: string[];
+        note?: string;
+        dimensions: EcommerceQADimensionAssessment[];
+    },
+) {
+    return request<{ run: EcommerceRunView }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce/runs/${encodeURIComponent(runId)}/slots/${encodeURIComponent(slotId)}/qa`, input));
+}
+
+export function createProjectEcommerceVideoSequence(
+    projectId: string,
+    runId: string,
+    input: { slotIds: string[]; title?: string; aspectRatio?: string; durationSeconds?: number; musicResourceId?: string },
+) {
+    return request<{ run: EcommerceRunView }>(api.post(`/projects/${encodeURIComponent(projectId)}/ecommerce/runs/${encodeURIComponent(runId)}/video-sequences`, input));
 }

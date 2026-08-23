@@ -1,0 +1,80 @@
+---
+title: 待验收
+description: 已实现但尚未由最终用户完整确认的功能与剩余验证。
+---
+
+# 待验收
+
+本页只记录已经进入代码、但尚未完成最终用户验收的变化。它不是“整个产品已完成”清单。
+
+## Film Agent Runtime 后端
+
+- 9 个 Agent、17 个 Skill、15 条 Intent Route、11 条 Handoff Route 已由版本化 Registry 加载并在启动时校验。
+- Run、Step、Attempt、人工决策、路由事实、有序 Event、Handoff Trigger 和不可变 Artifact revision 已持久化。
+- Provider 文本执行、租约恢复、人工锁定、HR-01 至 HR-08 自动交接，以及 HR-09/HR-11 显式收口已有自动化证据。
+- 短剧画布已接入 Run 选择、规划创建、人工决策、Artifact 锁定、版本回退和刷新恢复。
+- Agent 规划默认由注册表触发语句自动识别 Intent；自然语言插词可在唯一高置信匹配时容错，歧义仍要求人工选择。IR-11 会显式要求选择候选 Agent，不能提交不完整分流。
+- 新 Run 会引用当前谱系的现行锁定 Artifact，后端再按最终 Intent Route 的 required/optional 合同过滤，后续剧本审查、分镜、提示词、连续性和成片审查不再因 UI 未传输入 revision 而天然不可达。
+- 本地真实页面已创建一条自动路由 Run，并持久化为 `IR-01 / narrative_screenwriter / awaiting_human / deterministic_match`；该验证停在人工确认，没有调用 Provider。
+- 待用户验收：运行进度、待处理决策和失败恢复是否符合真实创作习惯。
+
+## Film 单镜头图片生产后端
+
+- 已实现 `报价 -> 明示确认费用 -> Task/Attempt -> Provider -> 资源 Result -> 系统 QC -> 人工 QC -> 付费重试/取消退款`。
+- 已实现独立的模型视觉 QC 报价、Task、Attempt 与费用记录；生成结果固定作为第一张证据图，人物、道具和场景参考图排在后面。
+- 模型视觉 QC 严格检查人物身份、人体、接触关系、表演、道具、场景、构图和视觉连续性八个维度。模型无论返回 `PASS | UNCERTAIN | FAIL` 都只能形成 `hold` 证据，不能替代人工接受。
+- `openai-image` 图片响应已兼容标准 `data[].url`、`data[].b64_json` 以及异步网关公开的顶层 `result_urls`；返回的远程图片会沿既有资源存储合同处理，不新增插件协议。
+- 报价提交会复核 Artifact、Registry、模型路由、能力/价格版本和参考图片快照；漂移在扣费前原子拒绝。
+- 已覆盖报价与提交幂等、报价过期、部分事实漂移、缺失媒体、禁止静默切路由、人工 `PASS/UNCERTAIN/FAIL`、追加式重试和 queued 取消退款。
+- 短剧画布已接入报价确认、费用提示、刷新恢复、结果预览、模型视觉 QC、八维证据、人工 QC 和显式重试入口。
+- 待用户验收：真实项目中的结果比较、单镜头重做效率和版本查看是否够用。
+
+### 65535 图片渠道现场合同
+
+- 已使用授权渠道调用 `gpt-image-2` 验证 `POST /v1/images/generations`：不带 `response_format` 返回 `data[].url`，带 `response_format: b64_json` 返回 `data[].b64_json`，两种结果均符合 `openai-image` 协议。
+- 生成返回的远程 PNG 已能下载并识别为有效图片。旧袜子任务的两次 Attempt 在上传参考图时被上游以 `413 Request Entity Too Large` 拒绝，且未保存可回填的 Provider 请求 ID；发送副本压缩和三种返图结构适配已完成，仍待重新报价后在应用内完成一次新 Attempt 的端到端验收。
+
+## Film 图片转视频
+
+- 已实现 `已接受图片 -> 锁定逐镜视频 Prompt -> Sequence/Slot -> 单槽位报价 -> 明示确认费用 -> Provider -> 视频 Result -> 系统 QC -> 人工 QC`。
+- 已覆盖序列与提交幂等、仅允许人工接受图片、报价过期、来源图片漂移、禁止通用重试、付费重试重新报价、queued 取消退款及状态聚合。
+- 画布已接入已接受图片选择、9:16 序列、视频模型、逐槽位费用确认、进度恢复、原生视频预览、停止、人工接受和请求重试。
+- Sequence 创建会原子保存逐镜 Continuity Ledger、九类连续性维度、Reference Lock 和待复核问题；结构检查不会冒充真实媒体视觉 QC。
+- 视频结果会执行媒体可访问性、MIME、画幅和时长技术 QC；确凿失败创建槽位级 Rework Event、阻止直接接受，并只允许显式付费重试。
+- 单视频已接入独立的模型视觉 QC：浏览器默认采样 0%、25%、50%、75%、100% 五帧并上传为受管资源，后端冻结视频/Prompt/来源图片 revision、采样时间、资源元数据、模型路由和费用。
+- 视频模型 QC 严格返回人物身份、人体、接触、表演、道具、场景、构图、运动、时间连续性和口型/音频十维证据；模型结论固定为 `hold`，不能自动接受视频。结构错误进入 `uncertain`，重新检查必须重新报价，视频版本变化后旧报告显示失效。
+- 整组 Sequence 已接入独立的模型连续性 QC：每个槽位冻结首尾帧，检查人物、服装、道具、场景、轴线、动作、光色、转场和口型/音频九维证据及全部相邻镜头承接关系。没有音频证据时对应维度强制 `UNCERTAIN`。
+- 整组模型报告以 `source=model/action=hold` 追加保存，不能覆盖人工评审或自动完成 Sequence；全部单镜人工接受后仍为 `needs_review`，只有现行范围上的人工整组 `PASS/accept` 才能进入 `completed`。
+- 整组 QC 已覆盖证据资源删除保护、报价/提交幂等、采样资源/槽位 revision/路由/价格漂移、报价过期、queued 取消退款、畸形付费输出 `uncertain` 以及人机评审隔离。
+- 只有具备现行人工整组 PASS 的视频 Sequence 才能加入现有 TimelineProject；重复导入会原位替换，并复用既有 FFmpeg 预览、组装和导出。
+- 桌面、1024×768 平板和 390×844 手机视口已检查，短剧制作面板无横向溢出；无限画布与 `ecommerce` 类型项目均不渲染短剧制作入口、模型视觉 QC 或 AgentTeam 语义。
+- 通用 `/canvas` 库已改为只展示独立自由画布；项目关联画布以及带 `skillDomain: film | ecommerce`、`ecommerceKind`、`ecommerceRef` 或 `ecommerceState` 的遗留孤立文档均被排除。页面总数、最近打开、批量关联、导出、删除和预览都只使用同一份自由画布集合。
+- 待用户验收：使用真实视频 Provider 完成多镜头生成，确认人物动作、身份、场景连续性、稳定性、耗时和费用。
+
+## 尚未完成
+
+- 图片、单视频和整组 Sequence 都已有独立模型视觉 QC，但尚未使用配置好的商业视觉模型完成真实多镜头用户验收；浏览器采样也不能替代服务端原生视频解码与音轨分析。
+- 时间线/FFmpeg 接线已完成代码闭环，但仍需用真实多镜头视频、音频和字幕完成一次最终成片导出验收。
+- 全部 Intent/Handoff 尚未逐条使用真实配置 Provider 完成运行证据。
+- Artifact 版本历史与追加式回退 UI 已进入短剧制作面板，仍待真实创作流程中的用户操作验收。
+- 电商工程迁移已进入主线并具备预设、Run/Slot/Attempt、报价、生成、重试、人工 QA、版本和视频计划；五组 Provider Bake-off、Top Wear、Lifestyle Tabletop 与商业质量门仍未完成。
+
+## 自动化验证
+
+当前检查点使用以下命令：
+
+```bash
+cd backend
+go test ./internal/service -run 'TestFilmProduction|TestFilmVisualQC|TestParseFilmVisualQC|TestFilmVideo|TestFilmVideoVisualQC|TestParseFilmVideoVisualQC|TestFilmVideoSequenceVisualQC|TestParseFilmVideoSequenceVisualQC|TestFilmMultiShot' -count=1
+go test ./internal/repository ./internal/handler ./internal/database ./internal/agentruntime -count=1
+go vet ./...
+
+cd ../web
+bun test test/film-workspace-isolation.test.ts test/ecommerce-canvas-isolation.test.ts
+pnpm run typecheck
+pnpm run build
+```
+
+上述后端测试和前端生产构建当前均通过。真实 Provider 的模型配置、商用素材和人工质量判断不属于自动化通过范围，不能据此宣称最终用户黄金路径已经验收。
+
+详细边界见 `docs/convergence/film-runtime-control-plane.md` 与 `docs/convergence/acceptance-gates.md`。

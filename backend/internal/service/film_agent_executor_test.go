@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -115,18 +116,36 @@ func TestProcessNextFilmAgentStepAutomaticallyAdvancesIR03Skills(t *testing.T) {
 		t.Fatalf("IR-03 output status = %s, want review", output.Status)
 	}
 	if len(executor.requests) != 2 || executor.requests[0].SkillIDs[0] != "tvc" || executor.requests[1].SkillIDs[0] != "screenwriter" ||
-		len(executor.requests[0].ExpectedOutputArtifactTypes) != 0 || len(executor.requests[1].ExpectedOutputArtifactTypes) != 1 ||
-		executor.requests[1].ExpectedOutputArtifactTypes[0] != "tvc-script" {
+		!reflect.DeepEqual(executor.requests[0].ExpectedOutputArtifactTypes, []string{"tvc-creative-brief"}) ||
+		!reflect.DeepEqual(executor.requests[1].ExpectedOutputArtifactTypes, []string{"tvc-script"}) {
 		t.Fatalf("IR-03 compiled execution order is invalid: %#v", executor.requests)
 	}
 	var secondPrompt struct {
-		DependencyResults []map[string]any `json:"dependencyResults"`
+		InputArtifacts    []filmAgentPromptArtifact `json:"inputArtifacts"`
+		DependencyResults []map[string]any          `json:"dependencyResults"`
 	}
 	if err := json.Unmarshal([]byte(executor.requests[1].Prompt), &secondPrompt); err != nil {
 		t.Fatalf("decode IR-03 second prompt: %v", err)
 	}
 	if len(secondPrompt.DependencyResults) != 1 || secondPrompt.DependencyResults[0]["stepId"] != completed.Steps[0].ID {
 		t.Fatalf("IR-03 second Skill did not receive first Skill evidence: %#v", secondPrompt.DependencyResults)
+	}
+	var firstOutputRefs []FilmProductionArtifactRef
+	if err := json.Unmarshal([]byte(completed.Steps[0].OutputArtifactRefsJSON), &firstOutputRefs); err != nil {
+		t.Fatalf("decode IR-03 first Skill output refs: %v", err)
+	}
+	if len(firstOutputRefs) != 1 || firstOutputRefs[0].Type != "tvc-creative-brief" {
+		t.Fatalf("IR-03 first Skill output refs = %#v", firstOutputRefs)
+	}
+	foundBrief := false
+	for _, artifact := range secondPrompt.InputArtifacts {
+		if artifact.Ref.RevisionID == firstOutputRefs[0].RevisionID && artifact.Ref.Digest == firstOutputRefs[0].Digest && artifact.Ref.Type == "tvc-creative-brief" {
+			foundBrief = true
+			break
+		}
+	}
+	if !foundBrief {
+		t.Fatalf("IR-03 second Skill did not receive the persisted first Artifact ref: %#v", secondPrompt.InputArtifacts)
 	}
 }
 

@@ -82,6 +82,10 @@ func Forbidden(message string) *AuthError {
 	return &AuthError{Status: 403, Message: message}
 }
 
+func Conflict(message string) *AuthError {
+	return &AuthError{Status: 409, Message: message}
+}
+
 func (s *Service) PublicAuthSettings() (*PublicAuthSettings, error) {
 	count, err := s.repo.UserCount()
 	if err != nil {

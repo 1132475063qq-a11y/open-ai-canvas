@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"infinite-canvas/backend/internal/agentruntime"
 	"infinite-canvas/backend/internal/model"
@@ -51,6 +52,13 @@ type LockFilmAgentArtifactRequest struct {
 	ExpectedRunRevision      int64  `json:"expectedRunRevision"`
 	ExpectedArtifactSequence int    `json:"expectedArtifactSequence"`
 	ExpectedRevisionID       string `json:"expectedRevisionId"`
+}
+
+type RollbackFilmAgentArtifactRequest struct {
+	ExpectedRunRevision       int64  `json:"expectedRunRevision"`
+	ExpectedArtifactSequence  int    `json:"expectedArtifactSequence"`
+	ExpectedCurrentRevisionID string `json:"expectedCurrentRevisionId"`
+	TargetRevisionID          string `json:"targetRevisionId"`
 }
 
 type FilmProductionArtifactRef struct {
@@ -131,6 +139,7 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
+	externalInputRefs = filterFilmRouteInputRefs(route, externalInputRefs)
 	authorityRefs := append([]FilmProductionArtifactRef{projectRequirementRef}, externalInputRefs...)
 	if err := validateFilmRouteInputs(route, authorityRefs); err != nil {
 		return FilmAgentRunCreateResult{}, err
@@ -236,6 +245,58 @@ func (s *Service) LockFilmAgentArtifact(userID string, projectID string, runID s
 			ID: newID(), EventType: "artifact.locked", ActorType: "user", ActorID: userID,
 		},
 		At: time.Now().UTC(),
+	})
+	if err != nil {
+		return nil, mapAgentRuntimeRepositoryError(err)
+	}
+	return result, nil
+}
+
+func (s *Service) RollbackFilmAgentArtifact(userID string, projectID string, runID string, artifactID string, idempotencyKey string, request RollbackFilmAgentArtifactRequest) (*repository.ProductionArtifactRollbackResult, error) {
+	if _, err := s.requireMutableFilmProject(userID, projectID); err != nil {
+		return nil, err
+	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if !filmAgentIdempotencyKeyPattern.MatchString(idempotencyKey) {
+		return nil, BadAuthRequest("X-Idempotency-Key 必须为 8-128 位字母、数字或 ._:-")
+	}
+	if request.ExpectedRunRevision < 1 || request.ExpectedArtifactSequence < 1 ||
+		strings.TrimSpace(request.ExpectedCurrentRevisionID) == "" || strings.TrimSpace(request.TargetRevisionID) == "" {
+		return nil, BadAuthRequest("回退 Artifact 必须携带当前 Run revision、Artifact sequence、current revision ID 和目标 revision ID")
+	}
+	detail, err := s.FilmAgentRunDetail(userID, projectID, runID)
+	if err != nil {
+		return nil, err
+	}
+	artifact, err := s.repo.ProductionArtifactForUser(userID, strings.TrimSpace(artifactID))
+	if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && (artifact.ProjectID != projectID || artifact.Domain != "film")) {
+		return nil, NotFound("Film Artifact 不存在")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := s.filmAgentRegistry.CanonicalArtifactType(artifact.ArtifactType); !ok {
+		return nil, BadAuthRequest("Artifact 类型不属于 Film AgentTeam")
+	}
+	targetArtifact, _, err := s.repo.ProductionArtifactRevisionForUser(userID, strings.TrimSpace(request.TargetRevisionID))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, NotFound("目标 Artifact revision 不存在")
+		}
+		return nil, err
+	}
+	if targetArtifact.ID != artifact.ID {
+		return nil, BadAuthRequest("目标 revision 不属于当前 Artifact")
+	}
+	rollbackRevisionID := deterministicFilmArtifactMutationID("revision", userID, projectID, runID, artifact.ID, idempotencyKey)
+	eventID := deterministicFilmArtifactMutationID("event", userID, projectID, runID, artifact.ID, idempotencyKey)
+	result, err := s.repo.RollbackProductionArtifactRevision(repository.ProductionArtifactRollbackCommand{
+		UserID: userID, ProjectID: projectID, Domain: "film", RunID: detail.Run.ID, ArtifactID: artifact.ID,
+		TargetRevisionID: strings.TrimSpace(request.TargetRevisionID), ExpectedRunRevision: request.ExpectedRunRevision,
+		ExpectedArtifactSequence: request.ExpectedArtifactSequence, ExpectedCurrentRevisionID: strings.TrimSpace(request.ExpectedCurrentRevisionID),
+		RollbackRevisionID: rollbackRevisionID, EventID: eventID,
+		Event: repository.AgentRuntimeEventInput{ID: eventID, EventType: "artifact.reverted", ActorType: "user", ActorID: userID},
+		At:    time.Now().UTC(),
 	})
 	if err != nil {
 		return nil, mapAgentRuntimeRepositoryError(err)
@@ -446,13 +507,11 @@ func (s *Service) selectFilmIntentRoute(objective string, routeID string, agentI
 			route agentruntime.IntentRouteDefinition
 			score int
 		}, 0)
-		normalizedObjective := strings.ToLower(strings.Join(strings.Fields(objective), ""))
 		for _, candidate := range s.filmAgentRegistry.IntentRoutes {
 			score := 0
 			for _, phrase := range candidate.TriggerPhrases {
-				normalizedPhrase := strings.ToLower(strings.Join(strings.Fields(phrase), ""))
-				if strings.Contains(normalizedObjective, normalizedPhrase) {
-					score += len([]rune(normalizedPhrase))
+				if phraseScore := filmIntentPhraseScore(objective, phrase); phraseScore > score {
+					score = phraseScore
 				}
 			}
 			if score > 0 {
@@ -467,8 +526,13 @@ func (s *Service) selectFilmIntentRoute(objective string, routeID string, agentI
 			return route, "", "", "", BadAuthRequest("无法可靠判断 Film Intent，请明确选择 IR-01 至 IR-15")
 		}
 		route = matches[0].route
-		reason = "命中注册表触发语句，自动选择 " + route.ID
-		confidence = "deterministic_match"
+		if matches[0].score >= 1000 {
+			reason = "命中注册表触发语句，自动选择 " + route.ID
+			confidence = "deterministic_match"
+		} else {
+			reason = "匹配注册表触发语义，自动选择 " + route.ID
+			confidence = "deterministic_similarity"
+		}
 	}
 	selectedAgentID := strings.TrimSpace(agentID)
 	if selectedAgentID == "" {
@@ -482,8 +546,53 @@ func (s *Service) selectFilmIntentRoute(objective string, routeID string, agentI
 	return route, selectedAgentID, reason, confidence, nil
 }
 
+func filmIntentPhraseScore(objective string, phrase string) int {
+	objectiveRunes := normalizeFilmIntentRunes(objective)
+	phraseRunes := normalizeFilmIntentRunes(phrase)
+	if len(objectiveRunes) == 0 || len(phraseRunes) == 0 {
+		return 0
+	}
+	objectiveText, phraseText := string(objectiveRunes), string(phraseRunes)
+	if strings.Contains(objectiveText, phraseText) {
+		return 1000 + len(phraseRunes)
+	}
+	if len(phraseRunes) < 3 || len(objectiveRunes) < 2 {
+		return 0
+	}
+	objectivePairs := make(map[string]struct{}, len(objectiveRunes)-1)
+	for index := 0; index < len(objectiveRunes)-1; index++ {
+		objectivePairs[string(objectiveRunes[index:index+2])] = struct{}{}
+	}
+	matched, total := 0, len(phraseRunes)-1
+	for index := 0; index < total; index++ {
+		if _, ok := objectivePairs[string(phraseRunes[index:index+2])]; ok {
+			matched++
+		}
+	}
+	// 60% 的触发短语二元组必须可在目标中直接找到；低于该阈值时
+	// 宁可要求人工选 Route，也不让一次昂贵生产走错 Agent。
+	if matched*100 < total*60 {
+		return 0
+	}
+	return matched*100/total + len(phraseRunes)
+}
+
+func normalizeFilmIntentRunes(value string) []rune {
+	runes := make([]rune, 0, len(value))
+	for _, char := range strings.ToLower(value) {
+		if unicode.IsLetter(char) || unicode.IsNumber(char) {
+			runes = append(runes, char)
+		}
+	}
+	return runes
+}
+
 func (s *Service) compileFilmIntentSteps(runID string, route agentruntime.IntentRouteDefinition, selectedAgentID string, inputRefs []FilmProductionArtifactRef, review bool, at time.Time) ([]model.AgentRuntimeStep, error) {
 	inputRefsJSON := mustFilmJSON(inputRefs)
+	stepOutputs, err := filmIntentStepOutputArtifactTypes(route)
+	if err != nil {
+		return nil, err
+	}
 	steps := make([]model.AgentRuntimeStep, 0, len(route.SkillIDs))
 	for index, skillID := range route.SkillIDs {
 		agentID, err := s.filmSkillOwner(route, skillID, selectedAgentID)
@@ -501,10 +610,7 @@ func (s *Service) compileFilmIntentSteps(runID string, route agentruntime.Intent
 		if index > 0 {
 			dependencies = []string{steps[index-1].ID}
 		}
-		expectedOutputs := []string{}
-		if index == len(route.SkillIDs)-1 {
-			expectedOutputs = route.OutputArtifactTypes
-		}
+		expectedOutputs := stepOutputs[index]
 		steps = append(steps, model.AgentRuntimeStep{
 			ID: newID(), RunID: runID, StepKey: fmt.Sprintf("intent:%s:%s", route.ID, skillID), Position: index,
 			RouteKind: "intent", RouteID: route.ID, AgentID: agentID, SkillIDsJSON: mustFilmJSON([]string{skillID}), Status: status,
@@ -517,6 +623,29 @@ func (s *Service) compileFilmIntentSteps(runID string, route agentruntime.Intent
 		return nil, errors.New("Film Intent Route 没有可执行 Skill")
 	}
 	return steps, nil
+}
+
+func filmIntentStepOutputArtifactTypes(route agentruntime.IntentRouteDefinition) ([][]string, error) {
+	if len(route.SkillIDs) == 0 {
+		return nil, errors.New("Film Intent Route 没有可执行 Skill")
+	}
+	if len(route.StepOutputArtifactTypes) == 0 {
+		if len(route.SkillIDs) != 1 {
+			return nil, fmt.Errorf("Film Intent %s 缺少多 Skill 的逐步输出 Artifact 合同", route.ID)
+		}
+		return [][]string{append([]string(nil), route.OutputArtifactTypes...)}, nil
+	}
+	if len(route.StepOutputArtifactTypes) != len(route.SkillIDs) {
+		return nil, fmt.Errorf("Film Intent %s 的逐步输出 Artifact 合同数量与 Skill 数量不一致", route.ID)
+	}
+	outputs := make([][]string, len(route.StepOutputArtifactTypes))
+	for index, stepOutputs := range route.StepOutputArtifactTypes {
+		if len(stepOutputs) == 0 {
+			return nil, fmt.Errorf("Film Intent %s Step %d 没有输出 Artifact", route.ID, index)
+		}
+		outputs[index] = append([]string(nil), stepOutputs...)
+	}
+	return outputs, nil
 }
 
 func (s *Service) filmSkillOwner(route agentruntime.IntentRouteDefinition, skillID string, selectedAgentID string) (string, error) {
@@ -589,6 +718,20 @@ func validateFilmRouteInputs(route agentruntime.IntentRouteDefinition, refs []Fi
 		}
 	}
 	return nil
+}
+
+func filterFilmRouteInputRefs(route agentruntime.IntentRouteDefinition, refs []FilmProductionArtifactRef) []FilmProductionArtifactRef {
+	allowed := make(map[string]struct{}, len(route.RequiredInputArtifactTypes)+len(route.OptionalInputArtifactTypes))
+	for _, artifactType := range append(append([]string(nil), route.RequiredInputArtifactTypes...), route.OptionalInputArtifactTypes...) {
+		allowed[artifactType] = struct{}{}
+	}
+	filtered := make([]FilmProductionArtifactRef, 0, len(refs))
+	for _, ref := range refs {
+		if _, ok := allowed[ref.Type]; ok {
+			filtered = append(filtered, ref)
+		}
+	}
+	return filtered
 }
 
 func buildFilmProjectRequirementsArtifact(userID string, project model.Project, runID string, stepID string, objective string, input map[string]any, at time.Time) (model.ProductionArtifact, model.ProductionArtifactRevision, FilmProductionArtifactRef, error) {
@@ -774,4 +917,9 @@ func mapAgentRuntimeRepositoryError(err error) error {
 	default:
 		return err
 	}
+}
+
+func deterministicFilmArtifactMutationID(kind string, values ...string) string {
+	hash := sha256.Sum256([]byte(kind + "\x00" + strings.Join(values, "\x00")))
+	return hex.EncodeToString(hash[:16])
 }

@@ -1,6 +1,7 @@
 import type { PortraitTextureSettings } from "@/lib/canvas/canvas-portrait-texture";
 import type { StyleExecutionPlan } from "@/lib/canvas/style-profile";
 import type { SrtEntry, SubtitleHighlight, SubtitleStyle } from "@/types/timeline";
+import type { EcommerceDomainRef, EcommerceNodeKind, EcommerceState } from "@/ecommerce/domain/types";
 
 export type Position = {
     x: number;
@@ -39,7 +40,7 @@ export type CanvasGenerationBatchMode = "storyboard_image" | "storyboard_video" 
 export type CanvasGenerationBatchStatus = "queued" | "running" | "partial_failed" | "completed" | "cancelled";
 export type CanvasGenerationBatchItemStatus = "waiting" | "submitting" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type CanvasImageGenerationType = "generation" | "edit";
-export type CanvasWorkflowKind = "free" | "script" | "story_input" | "character" | "scene" | "storyboard" | "shot" | "final" | "styleboard" | "reference_set" | "reference_video" | "action_board";
+export type CanvasWorkflowKind = "free" | "script" | "story_input" | "character" | "location" | "prop" | "scene" | "storyboard" | "shot" | "acting" | "prompt_pack" | "generation" | "final" | "styleboard" | "reference_set" | "reference_video" | "action_board" | "ecommerce_production" | "production_frame" | "product_input" | "product_dna" | "model_profile" | "scene_pack" | "preset_snapshot" | "creative_direction" | "shot_plan" | "generation_request" | "generated_asset" | "qa_report" | "motion_plan" | "video_sequence" | "presentation_mode" | "scene_plan" | "creative_shot_plan" | "result" | "qc" | "needs_you";
 export type CanvasVideoEditOperation = "text_to_video" | "image_to_video" | "extend" | "inpaint" | "replace_element" | "camera_motion" | "style_transfer" | "audio_to_video" | "compare_versions" | "concat";
 export type CanvasSkillCategory = "writing" | "storyboard" | "image" | "video" | "utility";
 export type CanvasSkillOutputMode = "text" | "json" | "image_prompt" | "workflow";
@@ -213,6 +214,8 @@ export type CanvasNodeMetadata = {
     workflowTitle?: string;
     workflowDescription?: string;
     stylePresetId?: string;
+    skillDomain?: "ecommerce" | "film" | "shared";
+    ecommerceProjectionLayoutVersion?: number;
     styleProfileJson?: string;
     styleExecutionPlan?: StyleExecutionPlan;
     chapterId?: string;
@@ -305,6 +308,15 @@ export type CanvasNodeMetadata = {
         expandedWidth: number;
         expandedHeight: number;
     };
+    ecommerceFrame?: {
+        inputLabel: string;
+        presetLabel: string;
+        statusLabel: string;
+        progress: number;
+        resultCount: number;
+        acceptedCount: number;
+        totalCount: number;
+    };
     folder?: {
         style: CanvasFolderStyle;
         theme?: CanvasFolderTheme;
@@ -356,6 +368,9 @@ export type CanvasNodeMetadata = {
 export type CanvasNodeData = {
     id: string;
     type: CanvasNodeType;
+    ecommerceKind?: EcommerceNodeKind;
+    ecommerceRef?: EcommerceDomainRef;
+    ecommerceState?: EcommerceState;
     title: string;
     position: Position;
     width: number;

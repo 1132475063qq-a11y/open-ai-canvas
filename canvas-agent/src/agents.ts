@@ -13,12 +13,17 @@ import type { AgentAttachment, AgentEmit } from "./types.js";
 type Json = Record<string, unknown>;
 type AgentEvent = Json & { type: string; usage?: unknown };
 type PendingRequest = { resolve: (value: unknown) => void; reject: (error: Error) => void };
+type PendingTurn = { resolve: (value: CodexTurnResult) => void; reject: (error: Error) => void };
 type CodexRunOptions = { threadId?: string; cwd?: string; onThreadId?: (threadId: string) => void };
+type CodexThreadOptions = { model?: string; sandbox?: "read-only" | "workspace-write"; includeCanvasMcp?: boolean };
 type AgentHistoryMessage = { id: string; role: "user" | "assistant" | "tool" | "error"; title?: string; text: string; detail?: unknown; streamId?: string };
+type CodexTurnResult = { text: string; usage?: unknown };
 
 let codexQueue: Promise<unknown> = Promise.resolve();
 let codexApp: CodexAppClient | null = null;
 let codexThreadId = "";
+let codexTextQueue: Promise<unknown> = Promise.resolve();
+let codexTextApp: CodexAppClient | null = null;
 const canvasAgentMcp = canvasAgentMcpCommand();
 const INTERNAL_CANVAS_MCP_TIMEOUT_MARGIN_MS = 60_000;
 const require = createRequire(import.meta.url);
@@ -31,6 +36,47 @@ export async function runCodexTurn(prompt: string, emit: AgentEmit, attachments:
     if (!prompt.trim()) return;
     codexQueue = codexQueue.catch(() => undefined).then(() => runCodexTurnNow(prompt, emit, attachments, options));
     await codexQueue;
+}
+
+export type CodexCliStatus = {
+    provider: "openai-codex-cli";
+    state: "installed" | "missing" | "error";
+    installed: boolean;
+    executable?: string;
+    version?: string;
+    message: string;
+};
+
+export async function getCodexCliStatus(options: { signal?: AbortSignal } = {}): Promise<CodexCliStatus> {
+    const executable = codexBin();
+    if (!executable) return { provider: "openai-codex-cli", state: "missing", installed: false, message: "未检测到 OpenAI Codex CLI" };
+    try {
+        const result = await runCodexCommand(executable, ["--version"], options.signal);
+        if (result.code !== 0) return { provider: "openai-codex-cli", state: "error", installed: false, executable, message: result.stderr.trim() || "Codex CLI 检测失败" };
+        const version = result.stdout.trim().split(/\r?\n/)[0]?.trim();
+        return { provider: "openai-codex-cli", state: "installed", installed: true, executable, ...(version ? { version } : {}), message: "OpenAI Codex CLI 已安装；文本生成使用本机 CLI 登录态" };
+    } catch (error) {
+        if (isAbortError(error)) throw error;
+        if (isMissingExecutableError(error)) return { provider: "openai-codex-cli", state: "missing", installed: false, executable, message: "未检测到 OpenAI Codex CLI，请安装后重试" };
+        return { provider: "openai-codex-cli", state: "error", installed: false, executable, message: errorMessage(error) };
+    }
+}
+
+export const CODEX_CLI_DEFAULT_MODELS = ["gpt-5.5"] as const;
+
+export async function runCodexText(prompt: string, model: string, signal?: AbortSignal): Promise<CodexTurnResult> {
+    const normalizedPrompt = prompt.trim();
+    const normalizedModel = model.trim();
+    if (!normalizedPrompt) throw new Error("GPT CLI 文本请求不能为空");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(normalizedModel)) throw new Error("GPT CLI 模型名无效");
+    codexTextQueue = codexTextQueue.catch(() => undefined).then(async () => {
+        codexTextApp ||= await CodexAppClient.start(() => undefined);
+        const thread = await codexTextApp.startThread(undefined, { model: normalizedModel, sandbox: "read-only", includeCanvasMcp: false });
+        const threadId = String(field(thread, "id") || "");
+        if (!threadId) throw new Error("GPT CLI 没有返回文本会话");
+        return codexTextApp.startTurn(threadId, normalizedPrompt, [], { model: normalizedModel });
+    });
+    return waitForAbort(codexTextQueue as Promise<CodexTurnResult>, signal);
 }
 
 async function runCodexTurnNow(prompt: string, emit: AgentEmit, attachments: AgentAttachment[], options: CodexRunOptions) {
@@ -112,20 +158,26 @@ class CodexAppClient {
     private deltaCount = 0;
     private lastUsage: unknown = null;
     private pending = new Map<number, PendingRequest>();
-    private activeTurns = new Map<string, PendingRequest>();
-    private completedTurns = new Map<string, Error | null>();
+    private activeTurns = new Map<string, PendingTurn>();
+    private completedTurns = new Map<string, { error: Error | null; text: string; usage?: unknown }>();
+    private currentTurnTextByItem = new Map<string, string>();
 
     private constructor(private child: ChildProcess, private emit: AgentEmit) {}
 
     static async start(emit: AgentEmit) {
-        const child = spawn(process.execPath, [codexBin(), "app-server", "--stdio"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+        const executable = codexBin();
+        if (!executable) throw new Error("未检测到 OpenAI Codex CLI");
+        const command = executable.endsWith(".js") ? process.execPath : executable;
+        const args = executable.endsWith(".js") ? [executable, "app-server", "--stdio"] : ["app-server", "--stdio"];
+        const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
         const client = new CodexAppClient(child, emit);
         child.stdout?.on("data", (chunk) => client.read(chunk.toString()));
         child.stderr?.on("data", (chunk) => emit("agent_log", { text: chunk.toString() }));
         child.on("error", (error) => emit("agent_error", { message: error.message }));
         child.on("exit", (code) => {
             client.failAll(`Codex app-server exited: ${code ?? 0}`);
-            codexApp = null;
+            if (codexApp === client) codexApp = null;
+            if (codexTextApp === client) codexTextApp = null;
             codexThreadId = "";
             emit("agent_log", { text: `Codex app-server exited: ${code ?? 0}` });
         });
@@ -134,8 +186,11 @@ class CodexAppClient {
         return client;
     }
 
-    async startThread(cwd?: string) {
-        const result = await this.request("thread/start", { approvalPolicy: "never", sandbox: "workspace-write", config: codexConfig(), ...(cwd ? { cwd } : {}), threadSource: "user" });
+    async startThread(cwd?: string, options: CodexThreadOptions = {}) {
+        const config = options.includeCanvasMcp === false
+            ? { ...(options.model ? { model: options.model } : {}) }
+            : { ...codexConfig(), ...(options.model ? { model: options.model } : {}) };
+        const result = await this.request("thread/start", { approvalPolicy: "never", sandbox: options.sandbox || "workspace-write", config, ...(cwd ? { cwd } : {}), threadSource: "user" });
         const thread = field(result, "thread") as Json | undefined;
         const id = String(field(thread, "id") || "");
         if (!id) throw new Error("Codex app-server 没有返回 thread id");
@@ -162,17 +217,18 @@ class CodexAppClient {
         return this.request("thread/archive", { threadId });
     }
 
-    async startTurn(threadId: string, prompt: string, images: string[]) {
-        const result = await this.request("turn/start", { threadId, input: codexInput(prompt, images), approvalPolicy: "never" });
+    async startTurn(threadId: string, prompt: string, images: string[], options: { model?: string } = {}): Promise<CodexTurnResult> {
+        this.currentTurnTextByItem.clear();
+        const result = await this.request("turn/start", { threadId, input: codexInput(prompt, images), approvalPolicy: "never", ...(options.model ? { model: options.model } : {}) });
         const turnId = String(field(field(result, "turn"), "id") || "");
         if (!turnId) throw new Error("Codex app-server 没有返回 turn id");
         const completed = this.completedTurns.get(turnId);
         if (this.completedTurns.has(turnId)) {
             this.completedTurns.delete(turnId);
-            if (completed) throw completed;
-            return;
+            if (completed?.error) throw completed.error;
+            return { text: completed?.text || "", ...(completed?.usage === undefined ? {} : { usage: completed.usage }) };
         }
-        await new Promise((resolve, reject) => this.activeTurns.set(turnId, { resolve, reject }));
+        return await new Promise<CodexTurnResult>((resolve, reject) => this.activeTurns.set(turnId, { resolve, reject }));
     }
 
     private request(method: string, params: unknown) {
@@ -221,11 +277,12 @@ class CodexAppClient {
             const turnId = String(field(params, "turnId") || field(field(params, "turn"), "id") || "");
             const pending = this.activeTurns.get(turnId);
             const error = field(field(params, "turn"), "error");
+            const completed = { error: error ? new Error(String(field(error, "message") || "Codex turn failed")) : null, text: this.currentTurnText(), usage: event.usage };
             if (pending) {
                 this.activeTurns.delete(turnId);
-                error ? pending.reject(new Error(String(field(error, "message") || "Codex turn failed"))) : pending.resolve(event);
+                completed.error ? pending.reject(completed.error) : pending.resolve({ text: completed.text, usage: completed.usage });
             } else if (turnId) {
-                this.completedTurns.set(turnId, error ? new Error(String(field(error, "message") || "Codex turn failed")) : null);
+                this.completedTurns.set(turnId, completed);
             }
             this.emit("agent_event", { agent: "codex", type: "stream.summary", delta_count: this.deltaCount });
             this.deltaCount = 0;
@@ -238,7 +295,12 @@ class CodexAppClient {
         const text = `${this.textByItem.get(id) || ""}${String(field(params, "delta") || "")}`;
         this.deltaCount += 1;
         this.textByItem.set(id, text);
+        this.currentTurnTextByItem.set(id, text);
         this.emit("agent_event", { agent: "codex", type: "item.updated", item: { id, type: "agent_message", text } });
+    }
+
+    private currentTurnText() {
+        return [...this.currentTurnTextByItem.values()].join("\n").trim();
     }
 
     private answerServerRequest(message: Json) {
@@ -450,8 +512,58 @@ function imageExt(type = "") {
     return "jpg";
 }
 
-function codexBin() {
-    return path.join(path.dirname(require.resolve("@openai/codex/package.json")), "bin", "codex.js");
+export function codexBin() {
+    const configured = process.env.CODEX_CLI_BIN?.trim();
+    if (configured) return configured;
+    try {
+        return path.join(path.dirname(require.resolve("@openai/codex/package.json")), "bin", "codex.js");
+    } catch {
+        return "codex";
+    }
+}
+
+function runCodexCommand(executable: string, args: string[], signal?: AbortSignal) {
+    return new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
+        const command = executable.endsWith(".js") ? process.execPath : executable;
+        const commandArgs = executable.endsWith(".js") ? [executable, ...args] : args;
+        const child = spawn(command, commandArgs, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+        let stdout = "";
+        let stderr = "";
+        let settled = false;
+        const abort = () => {
+            child.kill("SIGTERM");
+            finish(() => reject(new DOMException("Aborted", "AbortError")));
+        };
+        const finish = (action: () => void) => {
+            if (settled) return;
+            settled = true;
+            signal?.removeEventListener("abort", abort);
+            action();
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
+        child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
+        child.on("error", (error) => finish(() => reject(error)));
+        child.on("close", (code) => finish(() => resolve({ code: code ?? 1, stdout, stderr })));
+    });
+}
+
+function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal) {
+    if (!signal) return promise;
+    if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+    return new Promise<T>((resolve, reject) => {
+        const abort = () => reject(new DOMException("Aborted", "AbortError"));
+        signal.addEventListener("abort", abort, { once: true });
+        promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
+}
+
+function isAbortError(error: unknown) {
+    return error instanceof Error && error.name === "AbortError";
+}
+
+function isMissingExecutableError(error: unknown) {
+    return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT");
 }
 
 function pipeJsonLines(child: ReturnType<typeof spawn>, emit: AgentEmit, agent: string) {

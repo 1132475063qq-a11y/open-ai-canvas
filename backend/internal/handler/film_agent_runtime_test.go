@@ -136,6 +136,46 @@ func TestFilmAgentRuntimeHTTPContract(t *testing.T) {
 		t.Fatalf("stale lock status = %d, body = %s", staleLock.Code, staleLock.Body.String())
 	}
 
+	missingRollbackKey := filmAgentRuntimeRequest(t, router, http.MethodPost,
+		"/api/projects/"+project.ID+"/film/agent-runs/"+created.Run.ID+"/artifacts/"+lockArtifact.ID+"/rollback",
+		fmt.Sprintf(`{"expectedRunRevision":%d,"expectedArtifactSequence":%d,"expectedCurrentRevisionId":%q,"targetRevisionId":%q}`,
+			lockEnvelope.Data.Run.Revision, lockEnvelope.Data.Artifact.RevisionSequence, lockEnvelope.Data.Artifact.CurrentRevisionID, lockRevision.ID), cookie, "")
+	if missingRollbackKey.Code != http.StatusBadRequest {
+		t.Fatalf("missing rollback idempotency status = %d, body = %s", missingRollbackKey.Code, missingRollbackKey.Body.String())
+	}
+	rollbackBody := fmt.Sprintf(`{"expectedRunRevision":%d,"expectedArtifactSequence":%d,"expectedCurrentRevisionId":%q,"targetRevisionId":%q}`,
+		lockEnvelope.Data.Run.Revision, lockEnvelope.Data.Artifact.RevisionSequence, lockEnvelope.Data.Artifact.CurrentRevisionID, lockRevision.ID)
+	rollbackResponse := filmAgentRuntimeRequest(t, router, http.MethodPost,
+		"/api/projects/"+project.ID+"/film/agent-runs/"+created.Run.ID+"/artifacts/"+lockArtifact.ID+"/rollback",
+		rollbackBody, cookie, "film-http-rollback-0001")
+	if rollbackResponse.Code != http.StatusOK {
+		t.Fatalf("rollback Artifact status = %d, body = %s", rollbackResponse.Code, rollbackResponse.Body.String())
+	}
+	var rollbackEnvelope struct {
+		Data repository.ProductionArtifactRollbackResult `json:"data"`
+	}
+	decodeFilmAgentRuntimeResponse(t, rollbackResponse, &rollbackEnvelope)
+	if rollbackEnvelope.Data.Idempotent || rollbackEnvelope.Data.TargetRevision.ID != lockRevision.ID ||
+		rollbackEnvelope.Data.RollbackRevision.ParentRevisionID != lockEnvelope.Data.Artifact.CurrentRevisionID ||
+		rollbackEnvelope.Data.RollbackRevision.ContentDigest != lockRevision.ContentDigest ||
+		rollbackEnvelope.Data.Artifact.CurrentRevisionID != rollbackEnvelope.Data.RollbackRevision.ID {
+		t.Fatalf("rollback response is incomplete: %#v", rollbackEnvelope.Data)
+	}
+	replayRollback := filmAgentRuntimeRequest(t, router, http.MethodPost,
+		"/api/projects/"+project.ID+"/film/agent-runs/"+created.Run.ID+"/artifacts/"+lockArtifact.ID+"/rollback",
+		rollbackBody, cookie, "film-http-rollback-0001")
+	if replayRollback.Code != http.StatusOK {
+		t.Fatalf("rollback replay status = %d, body = %s", replayRollback.Code, replayRollback.Body.String())
+	}
+	var replayRollbackEnvelope struct {
+		Data repository.ProductionArtifactRollbackResult `json:"data"`
+	}
+	decodeFilmAgentRuntimeResponse(t, replayRollback, &replayRollbackEnvelope)
+	if !replayRollbackEnvelope.Data.Idempotent || replayRollbackEnvelope.Data.RollbackRevision.ID != rollbackEnvelope.Data.RollbackRevision.ID ||
+		replayRollbackEnvelope.Data.Run.Revision != rollbackEnvelope.Data.Run.Revision {
+		t.Fatalf("rollback replay was not idempotent: %#v", replayRollbackEnvelope.Data)
+	}
+
 	oversizedBody := `{"objective":"` + strings.Repeat("x", filmAgentRunRequestLimit) + `","intentRouteId":"IR-01"}`
 	oversized := filmAgentRuntimeRequest(t, router, http.MethodPost, "/api/projects/"+project.ID+"/film/agent-runs", oversizedBody, cookie, "film-http-large-0001")
 	if oversized.Code != http.StatusRequestEntityTooLarge {
@@ -207,6 +247,79 @@ func TestFilmAgentCloseoutHTTPContract(t *testing.T) {
 	}
 }
 
+func TestFilmProductionHTTPContract(t *testing.T) {
+	router, cookie, project, _, _ := newFilmAgentRuntimeTestRouter(t)
+	basePath := "/api/projects/" + project.ID + "/film/production"
+
+	unauthorized := filmAgentRuntimeRequest(t, router, http.MethodGet, basePath+"/attempts", "", "", "")
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized Film Production list status = %d, body = %s", unauthorized.Code, unauthorized.Body.String())
+	}
+	list := filmAgentRuntimeRequest(t, router, http.MethodGet, basePath+"/attempts?limit=10", "", cookie, "")
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"attempts":[]`) {
+		t.Fatalf("Film Production list status = %d, body = %s", list.Code, list.Body.String())
+	}
+	badLimit := filmAgentRuntimeRequest(t, router, http.MethodGet, basePath+"/attempts?limit=101", "", cookie, "")
+	if badLimit.Code != http.StatusBadRequest {
+		t.Fatalf("Film Production bad limit status = %d, body = %s", badLimit.Code, badLimit.Body.String())
+	}
+
+	missingQuoteKey := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/image-quotes", `{}`, cookie, "")
+	if missingQuoteKey.Code != http.StatusBadRequest {
+		t.Fatalf("Film Production missing quote key status = %d, body = %s", missingQuoteKey.Code, missingQuoteKey.Body.String())
+	}
+	missingQuote := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/image-quotes/missing/submit", `{"quoteFingerprint":"missing"}`, cookie, "film-http-submit-0001")
+	if missingQuote.Code != http.StatusNotFound {
+		t.Fatalf("Film Production missing quote status = %d, body = %s", missingQuote.Code, missingQuote.Body.String())
+	}
+	missingAttempt := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/attempts/missing/qc", `{"decision":"PASS","action":"accept"}`, cookie, "film-http-qc-0001")
+	if missingAttempt.Code != http.StatusNotFound {
+		t.Fatalf("Film Production missing Attempt status = %d, body = %s", missingAttempt.Code, missingAttempt.Body.String())
+	}
+	unauthorizedVisualQC := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/visual-qc-quotes", `{}`, "", "film-http-visual-qc-0001")
+	if unauthorizedVisualQC.Code != http.StatusUnauthorized {
+		t.Fatalf("Film visual QC unauthorized status = %d, body = %s", unauthorizedVisualQC.Code, unauthorizedVisualQC.Body.String())
+	}
+	missingVisualQCKey := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/visual-qc-quotes", `{}`, cookie, "")
+	if missingVisualQCKey.Code != http.StatusBadRequest {
+		t.Fatalf("Film visual QC missing key status = %d, body = %s", missingVisualQCKey.Code, missingVisualQCKey.Body.String())
+	}
+	missingVisualQCQuote := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/visual-qc-quotes/missing/submit", `{"quoteFingerprint":"missing"}`, cookie, "film-http-visual-qc-submit-0001")
+	if missingVisualQCQuote.Code != http.StatusNotFound {
+		t.Fatalf("Film visual QC missing quote status = %d, body = %s", missingVisualQCQuote.Code, missingVisualQCQuote.Body.String())
+	}
+	unauthorizedVideoVisualQC := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/video-visual-qc-quotes", `{}`, "", "film-http-video-visual-qc-0001")
+	if unauthorizedVideoVisualQC.Code != http.StatusUnauthorized {
+		t.Fatalf("Film video visual QC unauthorized status = %d, body = %s", unauthorizedVideoVisualQC.Code, unauthorizedVideoVisualQC.Body.String())
+	}
+	missingVideoVisualQCKey := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/video-visual-qc-quotes", `{}`, cookie, "")
+	if missingVideoVisualQCKey.Code != http.StatusBadRequest {
+		t.Fatalf("Film video visual QC missing key status = %d, body = %s", missingVideoVisualQCKey.Code, missingVideoVisualQCKey.Body.String())
+	}
+	missingVideoVisualQCQuote := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/video-visual-qc-quotes/missing/submit", `{"quoteFingerprint":"missing"}`, cookie, "film-http-video-visual-qc-submit-0001")
+	if missingVideoVisualQCQuote.Code != http.StatusNotFound {
+		t.Fatalf("Film video visual QC missing quote status = %d, body = %s", missingVideoVisualQCQuote.Code, missingVideoVisualQCQuote.Body.String())
+	}
+	unauthorizedSequenceVisualQC := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/video-sequence-visual-qc-quotes", `{}`, "", "film-http-sequence-visual-qc-0001")
+	if unauthorizedSequenceVisualQC.Code != http.StatusUnauthorized {
+		t.Fatalf("Film sequence visual QC unauthorized status = %d, body = %s", unauthorizedSequenceVisualQC.Code, unauthorizedSequenceVisualQC.Body.String())
+	}
+	missingSequenceVisualQCKey := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/video-sequence-visual-qc-quotes", `{}`, cookie, "")
+	if missingSequenceVisualQCKey.Code != http.StatusBadRequest {
+		t.Fatalf("Film sequence visual QC missing key status = %d, body = %s", missingSequenceVisualQCKey.Code, missingSequenceVisualQCKey.Body.String())
+	}
+	missingSequenceVisualQCQuote := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/video-sequence-visual-qc-quotes/missing/submit", `{"quoteFingerprint":"missing"}`, cookie, "film-http-sequence-visual-qc-submit-0001")
+	if missingSequenceVisualQCQuote.Code != http.StatusNotFound {
+		t.Fatalf("Film sequence visual QC missing quote status = %d, body = %s", missingSequenceVisualQCQuote.Code, missingSequenceVisualQCQuote.Body.String())
+	}
+
+	oversizedBody := `{"rootRunId":"` + strings.Repeat("x", filmProductionQuoteRequestLimit) + `"}`
+	oversized := filmAgentRuntimeRequest(t, router, http.MethodPost, basePath+"/image-quotes", oversizedBody, cookie, "film-http-large-0001")
+	if oversized.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("Film Production oversized status = %d, body = %s", oversized.Code, oversized.Body.String())
+	}
+}
+
 func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Project, *repository.Repository, *gorm.DB) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -220,6 +333,13 @@ func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Pro
 		&model.AgentRoutingDecision{}, &model.AgentHumanDecision{}, &model.AgentRuntimeEvent{},
 		&model.AgentHandoffTrigger{},
 		&model.ProductionArtifact{}, &model.ProductionArtifactRevision{},
+		&model.FilmProductionQuote{}, &model.FilmProductionAttempt{}, &model.FilmProductionQCReport{},
+		&model.FilmVisualQCQuote{}, &model.FilmVisualQCAttempt{},
+		&model.FilmVideoSequence{}, &model.FilmVideoSlot{}, &model.FilmVideoQuote{}, &model.FilmVideoAttempt{}, &model.FilmVideoQCReport{},
+		&model.FilmVideoVisualQCQuote{}, &model.FilmVideoVisualQCAttempt{},
+		&model.FilmVideoSequenceVisualQCQuote{}, &model.FilmVideoSequenceVisualQCAttempt{}, &model.FilmVideoSequenceReview{},
+		&model.FilmContinuityLedger{}, &model.FilmContinuityShotState{}, &model.FilmContinuityIssue{}, &model.FilmReworkEvent{},
+		&model.Task{}, &model.Result{}, &model.BillingOrder{},
 	); err != nil {
 		t.Fatalf("migrate handler database: %v", err)
 	}
@@ -255,6 +375,7 @@ func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Pro
 	router := gin.New()
 	api := router.Group("/api")
 	RegisterFilmAgentRuntimeRoutes(api, svc)
+	RegisterFilmProductionRoutes(api, svc)
 	return router, service.SessionCookieName + "=" + session.ID + "." + token, project, repo, db
 }
 

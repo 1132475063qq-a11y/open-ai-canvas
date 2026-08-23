@@ -4,6 +4,11 @@ node_modules/
 docs/*
 !docs/design/
 !docs/convergence/
+!docs/content/
+!docs/content/docs/
+!docs/content/docs/backend/
+!docs/content/docs/backend/backend-database.mdx
+!docs/content/docs/pending-test.mdx
 !docs/index.md
 .env*
 !.env.example

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { buildTimelineRenderPlan, formatSrtTimestamp, type TimelineRenderSource } from "../src/lib/timeline/timeline-to-ffmpeg";
+import { canImportFilmVideoSequence, importFilmVideoSequenceToTimeline } from "../src/lib/timeline/film-video-sequence";
+import type { FilmVideoSequenceView } from "../src/services/api/film-production";
 import type { TimelineClip, TimelineProject } from "../src/types/timeline";
 
 function videoClip(id: string, nodeId: string, startMs: number, durationMs: number): TimelineClip {
@@ -158,5 +160,61 @@ describe("formatSrtTimestamp", () => {
     test("SRT 时间码毫秒对齐三位", () => {
         expect(formatSrtTimestamp(3_600_000 + 60_000 + 1_234)).toBe("01:01:01,234");
         expect(formatSrtTimestamp(0)).toBe("00:00:00,000");
+    });
+});
+
+function filmSequenceView(accepted: boolean): FilmVideoSequenceView {
+    return {
+        sequence: { id: "sequence-1", title: "测试序列", status: "completed" },
+        slots: [
+            { slot: { id: "slot-1", sequenceId: "sequence-1", shotId: "shot-1", position: 0, durationMs: 2_000 }, attempts: [filmVideoAttempt("attempt-1", "video-1", accepted)] },
+            { slot: { id: "slot-2", sequenceId: "sequence-1", shotId: "shot-2", position: 1, durationMs: 3_000 }, attempts: [filmVideoAttempt("attempt-2", "video-2", accepted)] },
+        ],
+        continuity: { ledger: { id: "ledger-1", status: "ready", mediaState: "available" } },
+        sequenceReview: { id: "review-1", sequenceId: "sequence-1", ledgerId: "ledger-1", decision: "PASS", action: "accept", valid: true },
+        reworkEvents: [],
+    } as unknown as FilmVideoSequenceView;
+}
+
+function filmVideoAttempt(attemptId: string, resourceId: string, accepted: boolean) {
+    return {
+        attempt: { id: attemptId },
+        result: {
+            id: `result-${attemptId}`,
+            url: `/api/resources/${resourceId}/file`,
+            payload: JSON.stringify({ video: { storageKey: `resource:${resourceId}`, mimeType: "video/mp4" } }),
+        },
+        accepted,
+        qcReports: [],
+        retryAllowed: false,
+    };
+}
+
+describe("Film 视频序列导入时间线", () => {
+    test("只有整组人工接受后才允许导入", () => {
+        const pending = filmSequenceView(false);
+        expect(canImportFilmVideoSequence(pending)).toBe(false);
+        expect(() => importFilmVideoSequenceToTimeline(null, pending)).toThrow("整组视频必须全部通过逐镜人工验收");
+    });
+
+    test("整组连续性裁决缺失或已过期时禁止导入", () => {
+        const sequence = filmSequenceView(true);
+        sequence.sequenceReview!.valid = false;
+        expect(canImportFilmVideoSequence(sequence)).toBe(false);
+        expect(() => importFilmVideoSequenceToTimeline(null, sequence)).toThrow("整组视频必须通过当前版本的连续性验收");
+    });
+
+    test("按槽位顺序导入，并在重复导入时原位替换", () => {
+        const sequence = filmSequenceView(true);
+        const first = importFilmVideoSequenceToTimeline(null, sequence);
+        expect(first.importedCount).toBe(2);
+        expect(first.replaced).toBe(false);
+        expect(first.timeline.clips.map((clip) => [clip.startMs, clip.durationMs])).toEqual([[0, 2_000], [2_000, 3_000]]);
+        expect(first.timeline.clips[0].directMedia?.storageKey).toBe("resource:video-1");
+
+        const second = importFilmVideoSequenceToTimeline(first.timeline, sequence);
+        expect(second.replaced).toBe(true);
+        expect(second.timeline.clips).toHaveLength(2);
+        expect(second.timeline.durationMs).toBe(5_000);
     });
 });

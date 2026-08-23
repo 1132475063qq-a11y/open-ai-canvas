@@ -230,6 +230,23 @@ func (registry *Registry) Validate() error {
 		if err := validateSkillIDs(route.ID, route.SkillIDs, skills, true); err != nil {
 			return err
 		}
+		if len(route.StepOutputArtifactTypes) == 0 {
+			if len(route.SkillIDs) > 1 {
+				return fmt.Errorf("intent route %s must declare per-step output Artifact types for multiple Skills", route.ID)
+			}
+		} else {
+			if len(route.StepOutputArtifactTypes) != len(route.SkillIDs) {
+				return fmt.Errorf("intent route %s per-step output Artifact contract count does not match Skill count", route.ID)
+			}
+			for index, outputs := range route.StepOutputArtifactTypes {
+				if err := validateArtifactIDs(fmt.Sprintf("%s Step %d", route.ID, index), outputs, artifacts, true); err != nil {
+					return err
+				}
+			}
+			if !sameStrings(route.StepOutputArtifactTypes[len(route.StepOutputArtifactTypes)-1], route.OutputArtifactTypes) {
+				return fmt.Errorf("intent route %s final per-step output contract must match route output Artifact types", route.ID)
+			}
+		}
 		routeAgentIDs := append([]string{route.PrimaryAgentID}, route.CandidateAgentIDs...)
 		for _, skillID := range route.SkillIDs {
 			if !intersects(skills[skillID].OwnerAgentIDs, routeAgentIDs) {
@@ -495,6 +512,18 @@ func intersects(left []string, right []string) bool {
 		}
 	}
 	return false
+}
+
+func sameStrings(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func rejectDuplicateStrings(owner string, values []string) error {

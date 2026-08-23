@@ -26,6 +26,14 @@ type AssetVersionStatus string
 type WorkflowStatus string
 type WorkflowStepStatus string
 
+const (
+	ProjectTypeShortDrama    = "short-drama"
+	ProjectTypeEcommerce     = "ecommerce"
+	TaskProviderFilmGateway  = "provider-gateway"
+	TaskProviderEcommerce    = "ecommerce-provider-gateway"
+	ResultKindEcommerceAsset = "ecommerce_generated_asset"
+)
+
 // AdminAuditEvent 只允许追加，用于还原管理员写操作，禁止作为可编辑业务状态使用。
 type AdminAuditEvent struct {
 	ID           string    `json:"id" gorm:"primaryKey;size:36"`
@@ -39,6 +47,7 @@ type AdminAuditEvent struct {
 }
 
 const (
+	TaskStatusScheduled TaskStatus = "scheduled"
 	TaskStatusQueued    TaskStatus = "queued"
 	TaskStatusRunning   TaskStatus = "running"
 	TaskStatusSucceeded TaskStatus = "succeeded"

@@ -90,6 +90,22 @@ func TestRegistryValidationRejectsBrokenExecutableReferences(t *testing.T) {
 	}
 }
 
+func TestRegistryValidationRequiresContractsForMultipleIntentSkills(t *testing.T) {
+	registry, err := LoadFilmRegistry()
+	if err != nil {
+		t.Fatalf("LoadFilmRegistry() error = %v", err)
+	}
+	for index := range registry.IntentRoutes {
+		if registry.IntentRoutes[index].ID == "IR-03" {
+			registry.IntentRoutes[index].StepOutputArtifactTypes = nil
+			break
+		}
+	}
+	if err := registry.Validate(); err == nil || !strings.Contains(err.Error(), "per-step output Artifact types") {
+		t.Fatalf("Validate() error = %v, want missing multi-Skill output contract", err)
+	}
+}
+
 func agentIDs(registry *Registry) []string {
 	result := make([]string, 0, len(registry.Agents))
 	for _, item := range registry.Agents {

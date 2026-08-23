@@ -364,7 +364,16 @@ func (r *Repository) ClaimNextTask(owner string, leaseDuration time.Duration) (*
 			task = model.Task{}
 			return nil
 		}
-		return tx.First(&task, "id = ?", task.ID).Error
+		if err := tx.First(&task, "id = ?", task.ID).Error; err != nil {
+			return err
+		}
+		if model.IsFilmManagedTaskType(task.Type) {
+			return markFilmProductionTaskAttemptRunningTx(tx, task.Type, task.ID, now)
+		}
+		if task.Provider == model.TaskProviderEcommerce {
+			return claimEcommerceProductionAttempt(tx, &task, now)
+		}
+		return nil
 	})
 	if err != nil || task.ID == "" {
 		return nil, err
@@ -448,52 +457,120 @@ func (r *Repository) UpdateTaskProgress(id string, stage string, progress int) e
 
 func (r *Repository) SaveTaskCompletion(task *model.Task, expected model.TaskStatus, session *model.Session, message *model.Message, results []model.Result) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		updated := tx.Model(&model.Task{}).
-			Where("id = ? AND status = ?", task.ID, expected).
-			Select("*").Omit("id", "created_at").Updates(task)
-		if updated.Error != nil {
-			return updated.Error
+		if err := saveTaskCompletionTx(tx, task, expected, session, message, results); err != nil {
+			return err
 		}
-		if updated.RowsAffected != 1 {
-			return ErrTaskStateConflict
-		}
-		if session != nil {
-			if err := tx.Save(session).Error; err != nil {
-				return err
-			}
-		}
-		if message != nil {
-			if err := tx.Create(message).Error; err != nil {
-				return err
-			}
-		}
-		for index := range results {
-			if err := tx.Create(&results[index]).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return completeEcommerceProductionTask(tx, task, results, completionTime(task))
 	})
 }
 
+func completionTime(task *model.Task) time.Time {
+	if task != nil && task.CompletedAt != nil {
+		return *task.CompletedAt
+	}
+	return time.Now()
+}
+
 func (r *Repository) UpdateTaskTerminalState(id string, expected model.TaskStatus, status model.TaskStatus, stage string, errorText string, completedAt time.Time) (bool, error) {
-	result := r.db.Model(&model.Task{}).
-		Where("id = ? AND status = ?", id, expected).
-		Updates(map[string]any{
-			"status": status, "stage": stage, "error": errorText, "completed_at": &completedAt,
-			"lease_owner": "", "lease_expires_at": nil, "updated_at": completedAt,
-		})
-	return result.RowsAffected == 1, result.Error
+	updated := false
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.Task{}).
+			Where("id = ? AND status = ?", id, expected).
+			Updates(map[string]any{
+				"status": status, "stage": stage, "error": errorText, "completed_at": &completedAt,
+				"lease_owner": "", "lease_expires_at": nil, "updated_at": completedAt,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		var task model.Task
+		if err := tx.First(&task, "id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := finishEcommerceProductionTask(tx, &task, status, errorText, completedAt); err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	})
+	return updated, err
+}
+
+func (r *Repository) UpdateTaskTerminalStateWithFilmAttempt(id string, taskType string, expected model.TaskStatus, status model.TaskStatus, filmStatus model.FilmProductionAttemptStatus, stage string, errorText string, completedAt time.Time) (bool, error) {
+	updated := false
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.Task{}).
+			Where("id = ? AND status = ?", id, expected).
+			Updates(map[string]any{
+				"status": status, "stage": stage, "error": errorText, "completed_at": &completedAt,
+				"lease_owner": "", "lease_expires_at": nil, "updated_at": completedAt,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		updated = true
+		if taskType == model.FilmVisualQCTaskTypeImage {
+			return markFilmVisualQCTaskAttemptTerminalTx(tx, id, filmStatus, errorText, completedAt)
+		}
+		if taskType == model.FilmVisualQCTaskTypeVideo {
+			return markFilmVideoVisualQCTaskAttemptTerminalTx(tx, id, filmStatus, errorText, completedAt)
+		}
+		if taskType == model.FilmVisualQCTaskTypeSequence {
+			return markFilmVideoSequenceVisualQCTaskAttemptTerminalTx(tx, id, filmStatus, errorText, completedAt)
+		}
+		return markFilmProductionTaskAttemptTerminalTx(tx, taskType, id, filmStatus, errorText, completedAt)
+	})
+	return updated, err
 }
 
 func (r *Repository) CancelTaskIfStatus(userID string, id string, expected model.TaskStatus, now time.Time) (bool, error) {
-	result := r.db.Model(&model.Task{}).
-		Where("id = ? AND user_id = ? AND status = ?", id, userID, expected).
-		Updates(map[string]any{
-			"status": model.TaskStatusCancelled, "stage": "任务已取消", "completed_at": &now,
-			"lease_owner": "", "lease_expires_at": nil, "updated_at": now,
-		})
-	return result.RowsAffected == 1, result.Error
+	cancelled := false
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var task model.Task
+		if err := tx.First(&task, "id = ? AND user_id = ? AND status = ?", id, userID, expected).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+		result := tx.Model(&model.Task{}).
+			Where("id = ? AND user_id = ? AND status = ?", id, userID, expected).
+			Updates(map[string]any{
+				"status": model.TaskStatusCancelled, "stage": "任务已取消", "completed_at": &now,
+				"lease_owner": "", "lease_expires_at": nil, "updated_at": now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		cancelled = true
+		if model.IsFilmManagedTaskType(task.Type) {
+			filmStatus := model.FilmProductionAttemptStatusCancelled
+			if expected == model.TaskStatusRunning {
+				filmStatus = model.FilmProductionAttemptStatusUncertain
+			}
+			switch task.Type {
+			case model.FilmVisualQCTaskTypeImage:
+				return markFilmVisualQCTaskAttemptTerminalTx(tx, id, filmStatus, "任务已取消", now)
+			case model.FilmVisualQCTaskTypeVideo:
+				return markFilmVideoVisualQCTaskAttemptTerminalTx(tx, id, filmStatus, "任务已取消", now)
+			case model.FilmVisualQCTaskTypeSequence:
+				return markFilmVideoSequenceVisualQCTaskAttemptTerminalTx(tx, id, filmStatus, "任务已取消", now)
+			default:
+				return markFilmProductionTaskAttemptTerminalTx(tx, task.Type, id, filmStatus, "任务已取消", now)
+			}
+		}
+		return finishEcommerceProductionTask(tx, &task, model.TaskStatusCancelled, "任务已取消", now)
+	})
+	return cancelled, err
 }
 
 // 上游取消先落库再发请求；条件更新保证并发和重复取消只有一个调用方取得发送权。
@@ -1219,6 +1296,18 @@ func (r *Repository) ProjectAssetLink(projectID string, assetID string) (*model.
 	return &link, nil
 }
 
+func (r *Repository) ProjectAssetForProject(projectID string, assetID string) (*model.Asset, error) {
+	var asset model.Asset
+	err := r.db.Table("assets").Select("assets.*").
+		Joins("JOIN project_asset_links ON project_asset_links.asset_id = assets.id").
+		Where("project_asset_links.project_id = ? AND assets.id = ?", projectID, assetID).
+		First(&asset).Error
+	if err != nil {
+		return nil, err
+	}
+	return &asset, nil
+}
+
 func (r *Repository) NextProjectAssetPosition(projectID string, folderID string) (int, error) {
 	var result struct{ Maximum int }
 	err := r.db.Model(&model.ProjectAssetLink{}).
@@ -1712,6 +1801,73 @@ func (r *Repository) ReplaceCanvasProjects(userID string, projects []model.Canva
 			return nil
 		}
 		return tx.Create(&projects).Error
+	})
+}
+
+func (r *Repository) ProjectEcommerceArtifacts(projectID string) ([]model.EcommerceArtifact, error) {
+	var artifacts []model.EcommerceArtifact
+	err := r.db.Where("project_id = ?", projectID).Order("artifact_key asc, artifact_type asc, revision desc").Find(&artifacts).Error
+	return artifacts, err
+}
+
+func (r *Repository) EcommerceArtifactForProjectByID(projectID string, artifactID string) (*model.EcommerceArtifact, error) {
+	var artifact model.EcommerceArtifact
+	err := r.db.First(&artifact, "id = ? AND project_id = ?", artifactID, projectID).Error
+	if err != nil {
+		return nil, err
+	}
+	return &artifact, nil
+}
+
+func (r *Repository) EcommerceRunQAArtifacts(projectID string, runID string) ([]model.EcommerceArtifact, error) {
+	var artifacts []model.EcommerceArtifact
+	prefix := "run:" + runID + ":slot:"
+	err := r.db.
+		Where("project_id = ? AND artifact_type = ? AND artifact_key LIKE ?", projectID, "qa_report", prefix+"%").
+		Order("created_at desc, revision desc").
+		Find(&artifacts).Error
+	return artifacts, err
+}
+
+func (r *Repository) LatestEcommerceArtifact(projectID string, artifactKey string, artifactType string) (*model.EcommerceArtifact, error) {
+	var artifact model.EcommerceArtifact
+	err := r.db.Where("project_id = ? AND artifact_key = ? AND artifact_type = ?", projectID, artifactKey, artifactType).
+		Order("revision desc").First(&artifact).Error
+	if err != nil {
+		return nil, err
+	}
+	return &artifact, nil
+}
+
+// SaveEcommerceArtifactVersion only appends a new revision and advances the
+// project revision in the same transaction.
+func (r *Repository) SaveEcommerceArtifactVersion(artifact *model.EcommerceArtifact) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var project model.Project
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&project, "id = ?", artifact.ProjectID).Error; err != nil {
+			return err
+		}
+		var latest int
+		if err := tx.Model(&model.EcommerceArtifact{}).
+			Where("project_id = ? AND artifact_key = ? AND artifact_type = ?", artifact.ProjectID, artifact.ArtifactKey, artifact.ArtifactType).
+			Select("COALESCE(MAX(revision), 0)").Scan(&latest).Error; err != nil {
+			return err
+		}
+		artifact.Revision = latest + 1
+		if err := tx.Create(artifact).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&model.Project{}).Where("id = ?", artifact.ProjectID).Updates(map[string]any{
+			"revision":   gorm.Expr("revision + 1"),
+			"updated_at": artifact.UpdatedAt,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
 	})
 }
 

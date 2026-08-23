@@ -62,6 +62,19 @@ func TestFilmAgentRegistryCompilesAllIntentRoutesIntoExecutableSteps(t *testing.
 						t.Fatalf("Step %d dependency/status = %v/%s", index, dependencies, step.Status)
 					}
 				}
+				var expectedOutputs []string
+				if len(route.StepOutputArtifactTypes) > 0 {
+					expectedOutputs = route.StepOutputArtifactTypes[index]
+				} else {
+					expectedOutputs = route.OutputArtifactTypes
+				}
+				var actualOutputs []string
+				if err := json.Unmarshal([]byte(step.ExpectedOutputArtifactTypesJSON), &actualOutputs); err != nil {
+					t.Fatalf("decode Step output contract: %v", err)
+				}
+				if !reflect.DeepEqual(actualOutputs, expectedOutputs) {
+					t.Fatalf("Step %d output contract = %v, want %v", index, actualOutputs, expectedOutputs)
+				}
 			}
 			var outputs []string
 			if err := json.Unmarshal([]byte(steps[len(steps)-1].ExpectedOutputArtifactTypesJSON), &outputs); err != nil {
@@ -69,6 +82,96 @@ func TestFilmAgentRegistryCompilesAllIntentRoutesIntoExecutableSteps(t *testing.
 			}
 			if !reflect.DeepEqual(outputs, route.OutputArtifactTypes) {
 				t.Fatalf("expected outputs = %v, want %v", outputs, route.OutputArtifactTypes)
+			}
+		})
+	}
+}
+
+func TestFilmIntentRouterHandlesNaturalLanguageFillersWithoutHidingAmbiguity(t *testing.T) {
+	svc, _, _, _ := newFilmAgentRuntimeTestService(t)
+	route, agentID, _, confidence, err := svc.selectFilmIntentRoute("请帮我审查一下这个剧本，重点看人物动机", "", "")
+	if err != nil {
+		t.Fatalf("select natural Film intent: %v", err)
+	}
+	if route.ID != "IR-06" || agentID != "quality_control_editor" || confidence != "deterministic_similarity" {
+		t.Fatalf("natural Film intent = %s/%s/%s, want IR-06/quality_control_editor/deterministic_similarity", route.ID, agentID, confidence)
+	}
+	if _, _, _, _, err := svc.selectFilmIntentRoute("请设计角色并设计场景", "", ""); err == nil {
+		t.Fatal("ambiguous Film intent unexpectedly selected a Route")
+	}
+}
+
+func TestFilterFilmRouteInputRefsKeepsOnlyDeclaredAuthority(t *testing.T) {
+	svc, _, _, _ := newFilmAgentRuntimeTestService(t)
+	route, ok := svc.filmAgentRegistry.IntentRoute("IR-15")
+	if !ok {
+		t.Fatal("IR-15 is missing")
+	}
+	refs := []FilmProductionArtifactRef{
+		{RevisionID: "feasibility", Type: "production-feasibility-report"},
+		{RevisionID: "result", Type: "generation-result"},
+		{RevisionID: "script", Type: "script"},
+		{RevisionID: "routing", Type: "routing-decision"},
+	}
+	filtered := filterFilmRouteInputRefs(route, refs)
+	if len(filtered) != 3 || filtered[0].RevisionID != "feasibility" || filtered[1].RevisionID != "result" || filtered[2].RevisionID != "script" {
+		t.Fatalf("filtered Film refs = %#v", filtered)
+	}
+}
+
+func TestFilmAgentEveryIntentRouteExecutesThroughDurableRuntime(t *testing.T) {
+	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
+
+	for _, route := range svc.filmAgentRegistry.IntentRoutes {
+		route := route
+		t.Run(route.ID, func(t *testing.T) {
+			inputRevisionIDs := make([]string, 0, len(route.RequiredInputArtifactTypes))
+			for index, artifactType := range route.RequiredInputArtifactTypes {
+				revision := createFilmTestArtifactRevisionOfType(t, repo, project, route.ID+"-input-"+string(rune('a'+index)), artifactType)
+				inputRevisionIDs = append(inputRevisionIDs, revision.ID)
+			}
+
+			executor := &recordingFilmAgentExecutor{}
+			svc.filmAgentExecutor = executor
+			created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-route-exec-"+route.ID, CreateFilmAgentRunRequest{
+				Objective: "执行 " + route.Name, IntentRouteID: route.ID, AgentID: route.PrimaryAgentID,
+				Input: map[string]any{"fixture": route.ID}, InputArtifactRevisionIDs: inputRevisionIDs,
+			})
+			if err != nil {
+				t.Fatalf("CreateFilmAgentRun(): %v", err)
+			}
+
+			for processed := true; processed; {
+				processed, err = svc.ProcessNextFilmAgentStep()
+				if err != nil {
+					t.Fatalf("ProcessNextFilmAgentStep(): %v", err)
+				}
+			}
+			detail, err := repo.AgentRuntimeDetailForUser(project.UserID, created.Detail.Run.ID)
+			if err != nil {
+				t.Fatalf("AgentRuntimeDetailForUser(): %v", err)
+			}
+			if detail.Run.Status != model.AgentRunStatusCompleted || len(detail.Attempts) != len(detail.Steps) {
+				t.Fatalf("route did not complete durably: status=%s steps=%d attempts=%d", detail.Run.Status, len(detail.Steps), len(detail.Attempts))
+			}
+			for _, step := range detail.Steps {
+				if step.Status != model.AgentStepStatusCompleted {
+					t.Fatalf("Step %s status = %s, want completed", step.ID, step.Status)
+				}
+			}
+			for _, attempt := range detail.Attempts {
+				if attempt.Status != model.AgentAttemptStatusSucceeded || attempt.ResponseJSON == "" {
+					t.Fatalf("Attempt %s is not successful evidence: %#v", attempt.ID, attempt)
+				}
+			}
+			for _, artifactType := range route.OutputArtifactTypes {
+				output := findFilmAgentOutputRevision(t, detail.Artifacts, detail.ArtifactRevisions, artifactType)
+				if output.Status != model.ProductionArtifactStatusReview || output.SourceAttemptID == "" {
+					t.Fatalf("output %s is not review-stage durable evidence: %#v", artifactType, output)
+				}
+			}
+			if len(executor.requests) != len(detail.Steps) {
+				t.Fatalf("executor request count = %d, want %d", len(executor.requests), len(detail.Steps))
 			}
 		})
 	}
@@ -370,6 +473,25 @@ func newFilmAgentRuntimeTestService(t *testing.T) (*Service, *repository.Reposit
 		t.Fatalf("create Film project: %v", err)
 	}
 	return svc, repo, db, project
+}
+
+func createFilmTestArtifactRevisionOfType(t *testing.T, repo *repository.Repository, project model.Project, logicalKey string, artifactType string) model.ProductionArtifactRevision {
+	t.Helper()
+	artifact := &model.ProductionArtifact{
+		ID: logicalKey + "-artifact", UserID: project.UserID, ProjectID: project.ID, Domain: "film",
+		ArtifactType: artifactType, LogicalKey: logicalKey,
+	}
+	revisionInput := &model.ProductionArtifactRevision{
+		ID: logicalKey + "-revision", Status: model.ProductionArtifactStatusLocked, ContentJSON: `{"fixture":true}`,
+		ContentDigest: digestString(logicalKey), CreatedByType: "user", CreatedByID: project.UserID,
+	}
+	_, revision, err := repo.CreateProductionArtifactRevision(repository.ProductionArtifactRevisionCreate{
+		UserID: project.UserID, Artifact: artifact, Revision: revisionInput, ExpectedSequence: 0,
+	})
+	if err != nil {
+		t.Fatalf("create Film test input Artifact %s: %v", artifactType, err)
+	}
+	return *revision
 }
 
 func createFilmTestArtifactRevision(t *testing.T, repo *repository.Repository, project model.Project, logicalKey string, status model.ProductionArtifactStatus) model.ProductionArtifactRevision {

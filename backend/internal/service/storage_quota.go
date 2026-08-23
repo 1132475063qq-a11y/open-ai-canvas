@@ -113,6 +113,18 @@ func (s *Service) createTaskWithinStorageQuota(task *model.Task, billingOrder *m
 
 // 任务完成会同时扩张任务历史和 Agent 会话数据，必须在同一临界区核算并原子写入。
 func (s *Service) saveTaskCompletionWithinStorageQuota(task *model.Task, resultJSON []byte, opsJSON []byte, hasCanvasOps bool) error {
+	if model.IsFilmProductionTaskType(task.Type) {
+		return s.saveFilmProductionTaskCompletionWithinStorageQuota(task, resultJSON)
+	}
+	if task.Type == model.FilmVisualQCTaskTypeImage {
+		return s.saveFilmVisualQCTaskCompletionWithinStorageQuota(task, resultJSON)
+	}
+	if task.Type == model.FilmVisualQCTaskTypeVideo {
+		return s.saveFilmVideoVisualQCTaskCompletionWithinStorageQuota(task, resultJSON)
+	}
+	if task.Type == model.FilmVisualQCTaskTypeSequence {
+		return s.saveFilmVideoSequenceVisualQCTaskCompletionWithinStorageQuota(task, resultJSON)
+	}
 	policy, err := s.RuntimePolicy()
 	if err != nil {
 		return err
@@ -146,7 +158,16 @@ func (s *Service) saveTaskCompletionWithinStorageQuota(task *model.Task, resultJ
 			Content: "已生成影视级工作流分镜和画布回写操作。", Payload: string(resultJSON),
 		}
 		structuredDelta += int64(len(message.Content) + len(message.Payload))
-		results = append(results, model.Result{ID: newID(), UserID: task.UserID, TaskID: task.ID, SessionID: task.SessionID, Kind: "generation_result", Payload: string(resultJSON)})
+	}
+	// Ecommerce production tasks deliberately do not create an Agent session.
+	// They still need a Result row because the ecommerce completion hook uses it
+	// to create the generated_asset artifact and update the slot/attempt state.
+	if task.SessionID != "" || task.Provider == model.TaskProviderEcommerce {
+		kind := "generation_result"
+		if task.Provider == model.TaskProviderEcommerce {
+			kind = model.ResultKindEcommerceAsset
+		}
+		results = append(results, model.Result{ID: newID(), UserID: task.UserID, TaskID: task.ID, SessionID: task.SessionID, Kind: kind, Payload: string(resultJSON)})
 	}
 	if hasCanvasOps {
 		results = append(results, model.Result{ID: newID(), UserID: task.UserID, TaskID: task.ID, SessionID: task.SessionID, Kind: "canvas_ops", Payload: string(opsJSON)})

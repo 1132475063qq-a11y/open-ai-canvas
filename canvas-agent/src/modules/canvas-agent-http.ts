@@ -11,6 +11,9 @@ import {
     summarizeCodexThread,
     verifyCodexThreadWorkspace,
     withAgentPrompt,
+    getCodexCliStatus,
+    runCodexText,
+    CODEX_CLI_DEFAULT_MODELS,
 } from "../agents.js";
 import { CanvasSession } from "../canvas-session.js";
 import {
@@ -19,6 +22,7 @@ import {
     type LocalRuntimeConfig,
 } from "../config.js";
 import type { LocalRuntimeModule, LocalRuntimeProtectedRoute } from "../local-runtime.js";
+import { assertExactKeys } from "../local-runtime-security.js";
 import type { AgentAttachment } from "../types.js";
 
 export type CanvasAgentSession = Pick<
@@ -141,6 +145,33 @@ export function createCanvasAgentHttpModule(
             })().catch((error) => {
                 if (!res.headersSent) res.status(500).json({ ok: false, error: publicCanvasError(error) });
             });
+        }),
+        canvasRoute("GET", "/agent/codex/status", async (_req, res) => {
+            res.json({ ok: true, ...(await getCodexCliStatus()) });
+        }),
+        canvasRoute("GET", "/agent/codex/models", (_req, res) => {
+            res.json({ ok: true, provider: "openai-codex-cli", models: [...CODEX_CLI_DEFAULT_MODELS] });
+        }),
+        canvasRoute("POST", "/agent/codex/text", async (req, res) => {
+            const body = jsonRecord(req);
+            assertExactKeys(body, ["model", "prompt", "textHistory"]);
+            const model = String(body.model || "").trim();
+            const prompt = String(body.prompt || "").trim();
+            const textHistory = body.textHistory;
+            if (!Array.isArray(textHistory) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model) || !prompt || prompt.length > 60_000 || textHistory.length > 40) {
+                throw new Error("GPT CLI 文本请求格式无效");
+            }
+            const history = textHistory
+                .map((item) => {
+                    const value = item && typeof item === "object" ? (item as { role?: unknown; content?: unknown }) : {};
+                    if ((value.role !== "user" && value.role !== "assistant") || typeof value.content !== "string") throw new Error("GPT CLI 文本历史格式无效");
+                    return `${value.role}: ${value.content}`;
+                })
+                .join("\n\n");
+            const requestPrompt = history ? `对话上下文：\n${history}\n\n当前请求：\n${prompt}` : prompt;
+            if (requestPrompt.length > 60_000) throw new Error("GPT CLI 文本上下文过长");
+            const result = await runCodexText(requestPrompt, model);
+            res.json({ ok: true, mode: "text", model, text: result.text, ...(result.usage === undefined ? {} : { usage: result.usage }) });
         }),
         canvasRoute("POST", "/agent/claude/turn", (req, res) => {
             const body = jsonRecord(req);

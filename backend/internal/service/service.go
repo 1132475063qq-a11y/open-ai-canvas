@@ -234,6 +234,10 @@ func (s *Service) StartWorker() {
 			if err != nil {
 				return
 			}
+			// A confirmed ecommerce set may contain more slots than the active
+			// task allowance. Promote its server-owned scheduled tasks whenever
+			// capacity opens, including after a browser or service restart.
+			_ = s.repo.PromoteScheduledEcommerceTasks(setting.ActiveTaskLimit)
 			workerConcurrency := setting.WorkerConcurrency
 			for len(slots) < workerConcurrency {
 				releaseGlobal, acquired, err := s.coordinator.acquire(context.Background(), "workers", workerConcurrency, 45*time.Minute)
@@ -656,6 +660,12 @@ func (s *Service) RetryTask(userID string, id string) (*model.Task, error) {
 	task, err := s.repo.TaskForUser(userID, id)
 	if err != nil {
 		return nil, err
+	}
+	if task.Provider == model.TaskProviderEcommerce {
+		return nil, BadAuthRequest("电商槽位必须从套图工作台重试，以便重新报价并保留 Attempt 历史")
+	}
+	if model.IsFilmManagedTaskType(task.Type) {
+		return nil, BadAuthRequest("Film 制作任务必须重新报价后创建新 Attempt，不能使用通用任务重试")
 	}
 	if task.Status != model.TaskStatusFailed && task.Status != model.TaskStatusCancelled {
 		return nil, errors.New("only failed or cancelled tasks can be retried")
@@ -1101,7 +1111,11 @@ func (s *Service) processClaimedTask(task *model.Task) error {
 		task.Stage = "路由准备失败"
 		task.Error = s.UserFacingErrorMessage(err)
 		task.CompletedAt = ptr(time.Now())
-		_, _ = s.repo.UpdateTaskTerminalState(task.ID, model.TaskStatusRunning, task.Status, task.Stage, task.Error, *task.CompletedAt)
+		filmStatus := model.FilmProductionAttemptStatusFailed
+		if isRouteDispatchUncertain(err) {
+			filmStatus = model.FilmProductionAttemptStatusUncertain
+		}
+		_, _ = s.updateTaskTerminalState(task, model.TaskStatusRunning, filmStatus)
 		if isRouteDispatchUncertain(err) {
 			_ = s.MarkBillingUncertain(task.BillingOrderID, task.Error)
 		} else {
@@ -1114,7 +1128,7 @@ func (s *Service) processClaimedTask(task *model.Task) error {
 		task.Stage = "计费准备失败"
 		task.Error = s.UserFacingErrorMessage(err)
 		task.CompletedAt = ptr(time.Now())
-		_, _ = s.repo.UpdateTaskTerminalState(task.ID, model.TaskStatusRunning, task.Status, task.Stage, task.Error, *task.CompletedAt)
+		_, _ = s.updateTaskTerminalState(task, model.TaskStatusRunning, model.FilmProductionAttemptStatusFailed)
 		_ = s.RefundBilling(task.BillingOrderID, "计费准备失败，上游请求未发出")
 		return err
 	}
@@ -1146,6 +1160,9 @@ func (s *Service) processClaimedTask(task *model.Task) error {
 	}
 	providerSucceeded := err == nil
 	if err == nil {
+		if task.Provider == model.TaskProviderEcommerce {
+			result = enrichEcommerceResultCompositionFingerprint(result)
+		}
 		result, err = s.persistGeneratedMediaResult(task.UserID, result)
 	}
 	if err == nil {
@@ -1167,7 +1184,11 @@ func (s *Service) processClaimedTask(task *model.Task) error {
 			task.Stage = "任务已取消"
 			task.Error = "任务已取消"
 			task.CompletedAt = ptr(time.Now())
-			_, _ = s.repo.UpdateTaskTerminalState(task.ID, model.TaskStatusRunning, task.Status, task.Stage, task.Error, *task.CompletedAt)
+			filmStatus := model.FilmProductionAttemptStatusUncertain
+			if channelSlotFailedBeforeRequest {
+				filmStatus = model.FilmProductionAttemptStatusCancelled
+			}
+			_, _ = s.updateTaskTerminalState(task, model.TaskStatusRunning, filmStatus)
 			if channelSlotFailedBeforeRequest {
 				_ = s.RefundBilling(task.BillingOrderID, "等待渠道槽位期间取消，上游请求未发出")
 			} else {
@@ -1195,7 +1216,11 @@ func (s *Service) processClaimedTask(task *model.Task) error {
 		task.Stage = "任务失败"
 		task.Error = s.UserFacingErrorMessage(err)
 		task.CompletedAt = ptr(time.Now())
-		_, _ = s.repo.UpdateTaskTerminalState(task.ID, model.TaskStatusRunning, task.Status, task.Stage, task.Error, *task.CompletedAt)
+		filmStatus := model.FilmProductionAttemptStatusFailed
+		if providerSucceeded || (!channelSlotFailedBeforeRequest && s.BillingFailureRequiresReview(task.BillingOrderID, task.ID, err)) {
+			filmStatus = model.FilmProductionAttemptStatusUncertain
+		}
+		_, _ = s.updateTaskTerminalState(task, model.TaskStatusRunning, filmStatus)
 		if compactErr := s.finalizeTaskTextReplay(task.ID, model.TaskStatusFailed); compactErr != nil {
 			_ = s.log(task.UserID, task.ID, "error", "文本回放草稿归并失败", compactErr.Error())
 		}
@@ -1240,7 +1265,7 @@ func (s *Service) processClaimedTask(task *model.Task) error {
 		task.Stage = "任务结果保存失败"
 		task.Error = s.UserFacingErrorMessage(err)
 		task.CompletedAt = ptr(time.Now())
-		_, _ = s.repo.UpdateTaskTerminalState(task.ID, model.TaskStatusRunning, task.Status, task.Stage, task.Error, *task.CompletedAt)
+		_, _ = s.updateTaskTerminalState(task, model.TaskStatusRunning, model.FilmProductionAttemptStatusUncertain)
 		if compactErr := s.finalizeTaskTextReplay(task.ID, model.TaskStatusFailed); compactErr != nil {
 			_ = s.log(task.UserID, task.ID, "error", "文本回放草稿归并失败", compactErr.Error())
 		}

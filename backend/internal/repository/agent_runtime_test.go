@@ -306,6 +306,86 @@ func TestProductionArtifactRevisionsAreImmutableAndFenced(t *testing.T) {
 	}
 }
 
+func TestProductionArtifactRollbackIsImmutableAndIdempotent(t *testing.T) {
+	db := openAgentRuntimeTestDB(t, filepath.Join(t.TempDir(), "artifact-rollback.db"))
+	repo := New(db)
+	now := time.Now().UTC()
+	bundle := agentRuntimeTestBundle("run-rollback", "rollback-request", now)
+	createAgentRuntimeTestProject(t, db, bundle.Run.ProjectID, bundle.Run.UserID)
+	if err := repo.CreateAgentRuntimeBundle(bundle); err != nil {
+		t.Fatalf("create rollback runtime bundle: %v", err)
+	}
+
+	artifact := &model.ProductionArtifact{
+		ID: "rollback-artifact", UserID: bundle.Run.UserID, ProjectID: bundle.Run.ProjectID, Domain: "film",
+		ArtifactType: "script", LogicalKey: "rollback:script",
+	}
+	first := &model.ProductionArtifactRevision{
+		ID: "rollback-revision-1", Status: model.ProductionArtifactStatusReview,
+		ContentJSON: `{"version":1}`, ContentDigest: "rollback-digest-1", SourceRunID: bundle.Run.ID,
+		CreatedByType: "agent", CreatedByID: "narrative_screenwriter",
+	}
+	createdArtifact, firstRevision, err := repo.CreateProductionArtifactRevision(ProductionArtifactRevisionCreate{
+		UserID: bundle.Run.UserID, Artifact: artifact, Revision: first, ExpectedSequence: 0, At: now,
+	})
+	if err != nil {
+		t.Fatalf("create rollback revision 1: %v", err)
+	}
+	second := &model.ProductionArtifactRevision{
+		ID: "rollback-revision-2", Status: model.ProductionArtifactStatusLocked,
+		ContentJSON: `{"version":2}`, ContentDigest: "rollback-digest-2", SourceRunID: bundle.Run.ID,
+		CreatedByType: "user", CreatedByID: bundle.Run.UserID,
+	}
+	createdArtifact, secondRevision, err := repo.CreateProductionArtifactRevision(ProductionArtifactRevisionCreate{
+		UserID: bundle.Run.UserID, Artifact: createdArtifact, Revision: second, ExpectedSequence: createdArtifact.RevisionSequence, At: now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("create rollback revision 2: %v", err)
+	}
+
+	command := ProductionArtifactRollbackCommand{
+		UserID: bundle.Run.UserID, ProjectID: bundle.Run.ProjectID, Domain: "film", RunID: bundle.Run.ID,
+		ArtifactID: createdArtifact.ID, TargetRevisionID: firstRevision.ID, ExpectedRunRevision: bundle.Run.Revision,
+		ExpectedArtifactSequence: createdArtifact.RevisionSequence, ExpectedCurrentRevisionID: secondRevision.ID,
+		RollbackRevisionID: "rollback-revision-3", EventID: "rollback-event-2",
+		Event: AgentRuntimeEventInput{ID: "rollback-event-2", EventType: "artifact.reverted", ActorType: "user", ActorID: bundle.Run.UserID},
+		At:    now.Add(2 * time.Second),
+	}
+	result, err := repo.RollbackProductionArtifactRevision(command)
+	if err != nil {
+		t.Fatalf("rollback Artifact revision: %v", err)
+	}
+	if result.Idempotent || result.RollbackRevision.ParentRevisionID != secondRevision.ID ||
+		result.RollbackRevision.ContentJSON != firstRevision.ContentJSON || result.Artifact.CurrentRevisionID != command.RollbackRevisionID ||
+		result.Artifact.RevisionSequence != 3 || result.Run.Revision != bundle.Run.Revision+1 || result.Run.EventSequence != bundle.Run.EventSequence+1 {
+		t.Fatalf("rollback result is incoherent: %#v", result)
+	}
+
+	replay, err := repo.RollbackProductionArtifactRevision(command)
+	if err != nil {
+		t.Fatalf("replay Artifact rollback: %v", err)
+	}
+	if !replay.Idempotent || replay.RollbackRevision.ID != result.RollbackRevision.ID || replay.Artifact.RevisionSequence != result.Artifact.RevisionSequence || replay.Run.Revision != result.Run.Revision {
+		t.Fatalf("rollback replay is not idempotent: %#v", replay)
+	}
+
+	stale := command
+	stale.RollbackRevisionID = "rollback-revision-stale"
+	stale.EventID = "rollback-event-stale"
+	stale.Event.ID = stale.EventID
+	if _, err := repo.RollbackProductionArtifactRevision(stale); !errors.Is(err, ErrProductionArtifactConflict) {
+		t.Fatalf("stale rollback error = %v, want ErrProductionArtifactConflict", err)
+	}
+
+	revisions, err := repo.ProductionArtifactRevisionsForUser(bundle.Run.UserID, artifact.ID)
+	if err != nil {
+		t.Fatalf("load rollback revisions: %v", err)
+	}
+	if len(revisions) != 3 || revisions[0].ContentJSON != firstRevision.ContentJSON || revisions[1].ContentJSON != secondRevision.ContentJSON || revisions[2].ContentJSON != firstRevision.ContentJSON {
+		t.Fatalf("rollback mutated or duplicated history: %#v", revisions)
+	}
+}
+
 func TestHumanDecisionPauseAndResumeAreAtomicAndReplaySafe(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "agent-runtime.db")
 	db := openAgentRuntimeTestDB(t, databasePath)

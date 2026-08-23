@@ -1,6 +1,6 @@
-import { AnimatePresence, useReducedMotion } from "motion/react";
+import { useReducedMotion } from "motion/react";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { ArrowLeft, Check, ChevronRight, Clipboard, Copy, FolderOpen, FolderPlus, Image as ImageIcon, Layers3, Link2, Maximize2, PanelTop, Pencil, Plus, Redo2, Tags, Trash2, Undo2, Upload, UserRound } from "lucide-react";
+import { ArrowLeft, Check, ChevronRight, Clipboard, Copy, FolderOpen, FolderPlus, Image as ImageIcon, Layers3, Link2, Maximize2, PanelTop, Pencil, Redo2, Tags, Trash2, Undo2, UserRound } from "lucide-react";
 
 import { CanvasCreateMenu, type CanvasCreateCommand } from "@/components/canvas/canvas-create-menu";
 import { aceternityMotion } from "@/lib/aceternity-motion";
@@ -91,7 +91,6 @@ export function CanvasNodeContextMenu({
 }: CanvasNodeContextMenuProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const reducedMotion = useReducedMotion();
-    const [addOpen, setAddOpen] = useState(false);
     const [categoryOpen, setCategoryOpen] = useState(false);
 
     useEffect(() => {
@@ -114,7 +113,6 @@ export function CanvasNodeContextMenu({
     }, [categoryOpen, onClose]);
 
     useEffect(() => {
-        setAddOpen(false);
         setCategoryOpen(false);
     }, [menu.type, menu.x, menu.y]);
 
@@ -139,6 +137,22 @@ export function CanvasNodeContextMenu({
     const canCopyMediaUrl = Boolean(isMedia && hasNodeContent);
     const assetCategory = node ? canvasNodeAssetCategory(node) : "other";
     const position = getContextMenuPosition(menu);
+    const canvasCreateCommands =
+        menu.type === "canvas"
+            ? buildCanvasCreateCommands({
+                  workspaceMode,
+                  isProjectLinked,
+                  position: menu.position,
+                  runAction,
+                  onAddNode,
+                  onAddFolder,
+                  onChooseStyle,
+                  onOpenDirector,
+                  onUpload,
+                  onOpenAssets,
+                  onOpenProjectCharacters,
+              })
+            : [];
 
     return (
         <>
@@ -148,7 +162,7 @@ export function CanvasNodeContextMenu({
                 initial={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.97, x: -3, y: -3 }}
                 animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
                 transition={{ duration: aceternityMotion.duration.instant, ease: aceternityMotion.easing.enter }}
-                className="aceternity-floating-panel fixed z-[var(--z-popover)] flex w-[224px] max-h-[calc(100vh-56px)] origin-top-left flex-col overflow-hidden rounded-xl border p-1.5 backdrop-blur-2xl"
+                className={`aceternity-floating-panel fixed z-[var(--z-popover)] flex ${menu.type === "canvas" ? "w-[248px]" : "w-[224px]"} max-h-[calc(100vh-56px)] origin-top-left flex-col overflow-hidden rounded-xl border p-1.5 backdrop-blur-2xl`}
                 style={{ left: position.left, top: position.top, background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.node.text }}
                 onContextMenu={(event) => event.preventDefault()}
                 onPointerDown={(event) => event.stopPropagation()}
@@ -160,21 +174,12 @@ export function CanvasNodeContextMenu({
                             <MenuHeader title="设置资产分类" description={node?.title || nodeTypeLabel(node)} onBack={() => setCategoryOpen(false)} />
                             <MenuSection label="项目用途" />
                             {assetCategoryOptions.map((option) => (
-                                <MenuButton
-                                    key={option.value}
-                                    icon={assetCategory === option.value ? <Check /> : <Tags />}
-                                    label={option.label}
-                                    active={assetCategory === option.value}
-                                    onClick={() => runAction(() => onSetAssetCategory(option.value))}
-                                />
+                                <MenuButton key={option.value} icon={assetCategory === option.value ? <Check /> : <Tags />} label={option.label} active={assetCategory === option.value} onClick={() => runAction(() => onSetAssetCategory(option.value))} />
                             ))}
                         </>
                     ) : menu.type === "canvas" ? (
                         <>
-                            <MenuHeader title="画布命令" />
-                            <MenuButton icon={<Plus className="size-4" />} label="添加节点" chevron active={addOpen} onClick={() => setAddOpen((value) => !value)} />
-                            <MenuButton icon={<Upload className="size-4" />} label="上传到这里" onClick={() => runAction(onUpload)} />
-                            {!isProjectLinked ? <MenuButton icon={<FolderOpen className="size-4" />} label="从素材库插入" onClick={() => runAction(onOpenAssets)} /> : null}
+                            <CanvasCreateMenu commands={canvasCreateCommands} variant="list" />
                             <MenuDivider />
                             <MenuSection label="历史与剪贴板" />
                             <MenuButton icon={<Undo2 className="size-4" />} label="撤销" shortcut="⌘Z" disabled={!canUndo} onClick={() => runAction(onUndo)} />
@@ -211,7 +216,15 @@ export function CanvasNodeContextMenu({
                                 <>
                                     <MenuHeader title={node?.title || nodeTypeLabel(node)} />
                                     <MenuSection label="节点操作" />
-                                    {isFrame ? <MenuButton icon={isFolder ? <FolderOpen /> : <PanelTop />} label={node?.metadata?.frame?.collapsed ? `展开${isFolder ? "文件夹" : "背板"}` : `折叠${isFolder ? "文件夹" : "背板"}`} onClick={() => runAction(onToggleFrame)} /> : <MenuButton icon={<FolderPlus />} label="保存到我的素材" disabled={!canSaveAsset} onClick={() => runAction(onSaveAsset)} />}
+                                    {isFrame ? (
+                                        <MenuButton
+                                            icon={isFolder ? <FolderOpen /> : <PanelTop />}
+                                            label={node?.metadata?.frame?.collapsed ? `展开${isFolder ? "文件夹" : "背板"}` : `折叠${isFolder ? "文件夹" : "背板"}`}
+                                            onClick={() => runAction(onToggleFrame)}
+                                        />
+                                    ) : (
+                                        <MenuButton icon={<FolderPlus />} label="保存到我的素材" disabled={!canSaveAsset} onClick={() => runAction(onSaveAsset)} />
+                                    )}
                                     {isText ? <MenuButton icon={<Maximize2 />} label="放大编辑" onClick={() => runAction(onEditText)} /> : null}
                                     {isDrawing ? <MenuButton icon={<Pencil />} label="打开绘图" onClick={() => runAction(onOpenDrawing)} /> : null}
                                     {isText ? <MenuButton icon={<ImageIcon />} label="用文本生图" disabled={!canGenerateFromText} onClick={() => runAction(onGenerateImage)} /> : null}
@@ -233,51 +246,56 @@ export function CanvasNodeContextMenu({
                     )}
                 </div>
             </SpotlightSurface>
-
-            <AnimatePresence>
-                {menu.type === "canvas" && addOpen ? (
-                    <AddNodeContextMenu
-                        parentPosition={position}
-                        workspaceMode={workspaceMode}
-                        isProjectLinked={isProjectLinked}
-                        reducedMotion={Boolean(reducedMotion)}
-                        onAddNode={(type) => runAction(() => onAddNode(type))}
-                        onAddFolder={() => runAction(onAddFolder)}
-                        onChooseStyle={() => runAction(onChooseStyle)}
-                        onOpenDirector={() => runAction(() => onOpenDirector(menu.position))}
-                        onUpload={() => runAction(onUpload)}
-                        onOpenAssets={() => runAction(onOpenAssets)}
-                        onOpenProjectCharacters={() => runAction(onOpenProjectCharacters)}
-                    />
-                ) : null}
-            </AnimatePresence>
         </>
     );
 }
 
-function AddNodeContextMenu({ parentPosition, workspaceMode, isProjectLinked, reducedMotion, onAddNode, onAddFolder, onChooseStyle, onOpenDirector, onUpload, onOpenAssets, onOpenProjectCharacters }: { parentPosition: { left: number; top: number }; workspaceMode: CanvasWorkspaceMode; isProjectLinked: boolean; reducedMotion: boolean; onAddNode: (type: CanvasNodeType) => void; onAddFolder: () => void; onChooseStyle: () => void; onOpenDirector: () => void; onUpload: () => void; onOpenAssets: () => void; onOpenProjectCharacters: () => void }) {
-    const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const left = getSubmenuLeft(parentPosition.left);
+function buildCanvasCreateCommands({
+    workspaceMode,
+    isProjectLinked,
+    position,
+    runAction,
+    onAddNode,
+    onAddFolder,
+    onChooseStyle,
+    onOpenDirector,
+    onUpload,
+    onOpenAssets,
+    onOpenProjectCharacters,
+}: {
+    workspaceMode: CanvasWorkspaceMode;
+    isProjectLinked: boolean;
+    position: Position;
+    runAction: (action: () => void) => void;
+    onAddNode: (type: CanvasNodeType) => void;
+    onAddFolder: () => void;
+    onChooseStyle: () => void;
+    onOpenDirector: (position: Position) => void;
+    onUpload: () => void;
+    onOpenAssets: () => void;
+    onOpenProjectCharacters: () => void;
+}): CanvasCreateCommand[] {
     const createContext: AddNodeMenuContext = {
         workspaceMode,
         isProjectLinked,
         handlers: {
-            onAddText: () => onAddNode(CanvasNodeType.Text),
-            onAddImage: () => onAddNode(CanvasNodeType.Image),
-            onAddVideo: () => onAddNode(CanvasNodeType.Video),
-            onAddAudio: () => onAddNode(CanvasNodeType.Audio),
-            onAddScript: () => onAddNode(CanvasNodeType.Script),
-            onAddFrame: () => onAddNode(CanvasNodeType.Frame),
-            onAddFolder,
-            onAddDrawing: () => onAddNode(CanvasNodeType.Drawing),
-            onChooseStyle,
-            onOpenDirector,
-            onUpload,
-            onOpenMyAssets: onOpenAssets,
-            onOpenProjectCharacters,
+            onAddText: () => runAction(() => onAddNode(CanvasNodeType.Text)),
+            onAddImage: () => runAction(() => onAddNode(CanvasNodeType.Image)),
+            onAddVideo: () => runAction(() => onAddNode(CanvasNodeType.Video)),
+            onAddAudio: () => runAction(() => onAddNode(CanvasNodeType.Audio)),
+            onAddScript: () => runAction(() => onAddNode(CanvasNodeType.Script)),
+            onAddFrame: () => runAction(() => onAddNode(CanvasNodeType.Frame)),
+            onAddFolder: () => runAction(onAddFolder),
+            onAddDrawing: () => runAction(() => onAddNode(CanvasNodeType.Drawing)),
+            onChooseStyle: () => runAction(onChooseStyle),
+            onOpenDirector: () => runAction(() => onOpenDirector(position)),
+            onUpload: () => runAction(onUpload),
+            onOpenMyAssets: () => runAction(onOpenAssets),
+            onOpenProjectCharacters: () => runAction(onOpenProjectCharacters),
         },
     };
-    const commands: CanvasCreateCommand[] = resolveAddNodeMenuCommands(createContext).map((command) => ({
+
+    return resolveAddNodeMenuCommands(createContext).map((command) => ({
         id: command.id,
         label: command.label,
         icon: command.icon,
@@ -285,31 +303,25 @@ function AddNodeContextMenu({ parentPosition, workspaceMode, isProjectLinked, re
         section: command.section,
         onClick: () => command.run(createContext),
     }));
-
-    return (
-        <SpotlightSurface
-            spotlightColor={theme.toolbar.itemHover}
-            initial={reducedMotion ? { opacity: 0 } : { opacity: 0, x: left > parentPosition.left ? -5 : 5, scale: 0.97 }}
-            animate={{ opacity: 1, x: 0, scale: 1 }}
-            exit={reducedMotion ? { opacity: 0 } : { opacity: 0, x: left > parentPosition.left ? -4 : 4, scale: 0.98 }}
-            transition={{ duration: aceternityMotion.duration.instant, ease: aceternityMotion.easing.enter }}
-            className="aceternity-floating-panel fixed z-[var(--z-popover)] w-[260px] origin-top overflow-hidden rounded-[var(--dock-radius)] border p-2 backdrop-blur-2xl"
-            style={{ left, top: parentPosition.top, background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.node.text }}
-            onContextMenu={(event) => event.preventDefault()}
-            onPointerDown={(event) => event.stopPropagation()}
-        >
-            <div className="absolute inset-x-8 top-0 h-px" style={{ background: `linear-gradient(90deg, transparent, ${theme.toolbar.border}, transparent)` }} />
-            <CanvasCreateMenu commands={commands} />
-        </SpotlightSurface>
-    );
 }
 
 function MenuHeader({ title, description, onBack }: { title: string; description?: string; onBack?: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     return (
         <div className="mb-0.5 flex items-start gap-1 px-1.5 py-1.5">
-            {onBack ? <button type="button" onClick={onBack} className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md outline-none hover:bg-black/5 focus-visible:ring-2 dark:hover:bg-white/8" aria-label="返回媒体操作"><ArrowLeft className="size-3.5" /></button> : null}
-            <span className="min-w-0"><span className="block truncate text-xs font-semibold">{title}</span>{description && description !== title ? <span className="mt-0.5 block truncate text-[var(--fs-micro)]" style={{ color: theme.node.muted }}>{description}</span> : null}</span>
+            {onBack ? (
+                <button type="button" onClick={onBack} className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md outline-none hover:bg-black/5 focus-visible:ring-2 dark:hover:bg-white/8" aria-label="返回媒体操作">
+                    <ArrowLeft className="size-3.5" />
+                </button>
+            ) : null}
+            <span className="min-w-0">
+                <span className="block truncate text-xs font-semibold">{title}</span>
+                {description && description !== title ? (
+                    <span className="mt-0.5 block truncate text-[var(--fs-micro)]" style={{ color: theme.node.muted }}>
+                        {description}
+                    </span>
+                ) : null}
+            </span>
         </div>
     );
 }
@@ -318,7 +330,29 @@ function MenuSection({ label }: { label: string }) {
     return <div className="px-2 pb-1 pt-1.5 text-[var(--fs-micro)] font-medium opacity-45">{label}</div>;
 }
 
-function MenuButton({ icon, label, detail, shortcut, badge, chevron = false, active = false, disabled = false, danger = false, onClick }: { icon: ReactNode; label: string; detail?: string; shortcut?: string; badge?: string; chevron?: boolean; active?: boolean; disabled?: boolean; danger?: boolean; onClick?: () => void }) {
+function MenuButton({
+    icon,
+    label,
+    detail,
+    shortcut,
+    badge,
+    chevron = false,
+    active = false,
+    disabled = false,
+    danger = false,
+    onClick,
+}: {
+    icon: ReactNode;
+    label: string;
+    detail?: string;
+    shortcut?: string;
+    badge?: string;
+    chevron?: boolean;
+    active?: boolean;
+    disabled?: boolean;
+    danger?: boolean;
+    onClick?: () => void;
+}) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const color = danger ? theme.accent.danger : theme.node.text;
     return (
@@ -329,8 +363,27 @@ function MenuButton({ icon, label, detail, shortcut, badge, chevron = false, act
             disabled={disabled}
             onClick={onClick}
         >
-            <span className="canvas-menu-item-icon grid size-7 shrink-0 place-items-center rounded-md border opacity-75 group-hover:opacity-100 [&_svg]:size-3.5" style={{ background: danger ? `${theme.accent.danger}12` : theme.spatial.surface, borderColor: danger ? `${theme.accent.danger}33` : theme.toolbar.border, color: danger ? theme.accent.danger : theme.node.text }}>{icon}</span>
-            <span className="min-w-0 flex-1"><span className="flex items-center gap-1 text-xs font-medium"><span className="truncate">{label}</span>{badge ? <span className="rounded-full border px-1 py-0.5 text-[var(--fs-nano)] font-bold" style={{ background: theme.toolbar.activeBg, borderColor: theme.toolbar.border, color: theme.node.muted }}>{badge}</span> : null}</span>{detail ? <span className="mt-0.5 block truncate text-[var(--fs-micro)]" style={{ color: theme.node.muted }}>{detail}</span> : null}</span>
+            <span
+                className="canvas-menu-item-icon grid size-7 shrink-0 place-items-center rounded-md border opacity-75 group-hover:opacity-100 [&_svg]:size-3.5"
+                style={{ background: danger ? `${theme.accent.danger}12` : theme.spatial.surface, borderColor: danger ? `${theme.accent.danger}33` : theme.toolbar.border, color: danger ? theme.accent.danger : theme.node.text }}
+            >
+                {icon}
+            </span>
+            <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1 text-xs font-medium">
+                    <span className="truncate">{label}</span>
+                    {badge ? (
+                        <span className="rounded-full border px-1 py-0.5 text-[var(--fs-nano)] font-bold" style={{ background: theme.toolbar.activeBg, borderColor: theme.toolbar.border, color: theme.node.muted }}>
+                            {badge}
+                        </span>
+                    ) : null}
+                </span>
+                {detail ? (
+                    <span className="mt-0.5 block truncate text-[var(--fs-micro)]" style={{ color: theme.node.muted }}>
+                        {detail}
+                    </span>
+                ) : null}
+            </span>
             {shortcut ? <span className="shrink-0 text-[var(--fs-micro)] opacity-38">{shortcut}</span> : null}
             {chevron ? <ChevronRight className="size-3 shrink-0 opacity-45 transition-transform group-hover:translate-x-0.5" /> : null}
         </button>
@@ -344,17 +397,12 @@ function MenuDivider() {
 
 function getContextMenuPosition(menu: ContextMenuState) {
     if (typeof window === "undefined") return { left: menu.x, top: menu.y };
-    const width = 224;
-    const estimatedHeight = menu.type === "node" ? Math.min(360, window.innerHeight - 72) : menu.type === "canvas" ? 250 : 84;
+    const width = menu.type === "canvas" ? 248 : 224;
+    const estimatedHeight = menu.type === "node" ? Math.min(360, window.innerHeight - 72) : menu.type === "canvas" ? Math.min(620, window.innerHeight - 72) : 84;
     return {
         left: clamp(menu.x, 12, Math.max(12, window.innerWidth - width - 12)),
         top: clamp(menu.y, 68, Math.max(68, window.innerHeight - estimatedHeight - 12)),
     };
-}
-
-function getSubmenuLeft(parentLeft: number) {
-    if (typeof window === "undefined") return parentLeft + 192;
-    return parentLeft + 224 + 8 + 260 <= window.innerWidth - 12 ? parentLeft + 232 : Math.max(12, parentLeft - 268);
 }
 
 function clamp(value: number, min: number, max: number) {

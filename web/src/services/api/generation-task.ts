@@ -3,12 +3,14 @@ import { getImageBlob } from "@/services/image-storage";
 import { resourceIdFromStorageKey, resourceStorageKey, uploadResourceFile } from "@/services/api/resources";
 import { createGenerationTask, waitForGenerationTask, type GenerationTask } from "@/services/api/task-center";
 import { LOCAL_DREAMINA_WAIT_STOPPED_CODE, LocalDreaminaGenerationClientError, runLocalDreaminaGenerationTask, type LocalDreaminaGenerationInput, type LocalDreaminaGenerationTask } from "@/services/local-dreamina-generation";
+import { runLocalCodexText, type LocalCodexTextInput } from "@/services/local-codex-cli";
 import { isLocalDreaminaBackgroundTask, localDreaminaTaskId, projectLocalDreaminaTask, stripLocalDreaminaTaskPrefix } from "@/services/local-dreamina-task-projection";
 import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
 import { grokImagePromptLimitError } from "@/lib/grok-image-prompt-limit";
 import { resolveVideoOperation } from "@/lib/model-selection";
 import { logicalModelIDForConfig, modelOptionName, resolveModelChannel, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import { useLocalDreaminaModelStore } from "@/stores/use-local-dreamina-model-store";
+import { getLocalRuntimeSessionClient } from "@/stores/use-local-runtime-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import { buildBackendToolRequests, type ResponseFunctionTool, type ResponseInputMessage, type ToolChoice, type ToolResponseResult } from "@/services/api/image";
@@ -55,6 +57,7 @@ export type GenerationTaskDependencies = {
     createId: () => string;
     now: () => string;
     ensureLocalDreaminaReady?: (signal?: AbortSignal) => Promise<unknown>;
+    runLocalCodex?: (input: LocalCodexTextInput, signal?: AbortSignal) => ReturnType<typeof runLocalCodexText>;
 };
 
 const defaultDependencies: GenerationTaskDependencies = {
@@ -64,6 +67,7 @@ const defaultDependencies: GenerationTaskDependencies = {
     createId: () => crypto.randomUUID(),
     now: () => new Date().toISOString(),
     ensureLocalDreaminaReady: (signal) => useLocalDreaminaModelStore.getState().ensureReady(signal),
+    runLocalCodex: (input, signal) => runLocalCodexText(input, getLocalRuntimeSessionClient(), signal),
 };
 
 type PreparedGenerationReferences = {
@@ -95,7 +99,7 @@ export async function runBackendGenerationTask(
         attemptGroupId,
     }: BackendGenerationTaskOptions,
     dependencies: GenerationTaskDependencies = defaultDependencies,
-) {
+): Promise<BackendGenerationResult> {
     throwIfAborted(signal);
     assertClientPromptLimit(mode, prompt, config, metadata);
     if (isLocalDreaminaModel(config.model)) {
@@ -106,19 +110,17 @@ export async function runBackendGenerationTask(
             dependencies,
         );
     }
+    if (isLocalCodexModel(config.model)) {
+        if (mode !== "text") throw new Error("GPT CLI 当前仅作为文本模型使用");
+        if (!dependencies.runLocalCodex) throw new Error("GPT CLI 本机适配器未就绪");
+        return dependencies.runLocalCodex({ model: config.model as `local:codex-cli:${string}`, prompt, textHistory }, signal);
+    }
     const prepared = await prepareGenerationReferences({ referenceImages, referenceVideos, referenceAudios, mask });
     throwIfAborted(signal);
     return createAndWaitGenerationTask({ projectId, mode, prompt, config, referenceImages, referenceVideos, referenceAudios, textHistory, signal, metadata, onTaskUpdate }, prepared, dependencies);
 }
 
-export async function runBackendToolGenerationTask(options: {
-    prompt: string;
-    config: AiConfig;
-    messages: ResponseInputMessage[];
-    tools: ResponseFunctionTool[];
-    toolChoice: ToolChoice;
-    signal?: AbortSignal;
-}): Promise<ToolResponseResult> {
+export async function runBackendToolGenerationTask(options: { prompt: string; config: AiConfig; messages: ResponseInputMessage[]; tools: ResponseFunctionTool[]; toolChoice: ToolChoice; signal?: AbortSignal }): Promise<ToolResponseResult> {
     throwIfAborted(options.signal);
     const logicalModelId = logicalModelIDForConfig(options.config);
     if (!logicalModelId) throw new Error("当前模型不是平台系统模型");
@@ -145,7 +147,7 @@ export async function runBackendToolGenerationTask(options: {
     };
 }
 
-export async function runBackendGenerationTaskBatch(options: BackendGenerationTaskOptions & { count: number }, dependencies: GenerationTaskDependencies = defaultDependencies) {
+export async function runBackendGenerationTaskBatch(options: BackendGenerationTaskOptions & { count: number }, dependencies: GenerationTaskDependencies = defaultDependencies): Promise<PromiseSettledResult<BackendGenerationResult>[]> {
     const count = Math.max(1, Math.min(15, Math.floor(Number(options.count)) || 1));
     throwIfAborted(options.signal);
     assertClientPromptLimit(options.mode, options.prompt, options.config, options.metadata);
@@ -153,7 +155,7 @@ export async function runBackendGenerationTaskBatch(options: BackendGenerationTa
     if (isLocalDreaminaModel(options.config.model)) {
         await dependencies.ensureLocalDreaminaReady?.(options.signal);
         throwIfAborted(options.signal);
-        return Promise.allSettled(
+        return Promise.allSettled<BackendGenerationResult>(
             Array.from({ length: count }, (_, batchIndex) => {
                 const retryContext = options.retryContextsByBatchIndex?.[batchIndex];
                 return runLocalDreaminaGeneration(
@@ -171,9 +173,16 @@ export async function runBackendGenerationTaskBatch(options: BackendGenerationTa
             }),
         );
     }
+    if (isLocalCodexModel(options.config.model)) {
+        if (options.mode !== "text") throw new Error("GPT CLI 当前仅作为文本模型使用");
+        if (!dependencies.runLocalCodex) throw new Error("GPT CLI 本机适配器未就绪");
+        return Promise.allSettled<BackendGenerationResult>(
+            Array.from({ length: count }, () => dependencies.runLocalCodex!({ model: options.config.model as `local:codex-cli:${string}`, prompt: options.prompt, textHistory: options.textHistory }, options.signal)),
+        );
+    }
     const prepared = await prepareGenerationReferences(options);
     throwIfAborted(options.signal);
-    return Promise.allSettled(
+    return Promise.allSettled<BackendGenerationResult>(
         Array.from({ length: count }, (_, batchIndex) =>
             createAndWaitGenerationTask(
                 {
@@ -271,13 +280,16 @@ async function runLocalDreaminaGeneration(options: BackendGenerationTaskOptions,
 
 function generationOperation(options: BackendGenerationTaskOptions) {
     if (options.mode !== "video") return options.mode;
-    return resolveVideoOperation({
-        textCount: 0,
-        imageCount: options.referenceImages?.length ?? 0,
-        videoCount: options.referenceVideos?.length ?? 0,
-        audioCount: options.referenceAudios?.length ?? 0,
-        characterCount: 0,
-    }, options.metadata?.videoEditOperation as string | undefined);
+    return resolveVideoOperation(
+        {
+            textCount: 0,
+            imageCount: options.referenceImages?.length ?? 0,
+            videoCount: options.referenceVideos?.length ?? 0,
+            audioCount: options.referenceAudios?.length ?? 0,
+            characterCount: 0,
+        },
+        options.metadata?.videoEditOperation as string | undefined,
+    );
 }
 
 export function isGenerationTaskCancelled(error: unknown, signal?: AbortSignal) {
@@ -355,6 +367,10 @@ function generationClientContext(context: Extract<LocalDreaminaGenerationInput["
 
 function isLocalDreaminaModel(model: string) {
     return /^local:dreamina-cli:[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model.trim());
+}
+
+function isLocalCodexModel(model: string) {
+    return /^local:codex-cli:[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model.trim());
 }
 
 function throwIfAborted(signal?: AbortSignal) {
@@ -505,11 +521,12 @@ export function backendProviderConfig(config: AiConfig) {
 function logicalCapabilityOptions(config: AiConfig, mode: BackendGenerationMode) {
     const channel = resolveModelChannel(config, config.model);
     const spec = channel.modelCosts?.find((item) => item.model === modelOptionName(config.model))?.logicalCapabilitySpec;
-    const candidates: Record<string, unknown> = mode === "image"
-        ? { size: config.size, quality: config.quality, transparentBackground: config.transparentBackground === "true", count: Number(config.count) }
-        : mode === "video"
-            ? { size: config.size, videoSeconds: Number(config.videoSeconds), vquality: config.vquality, videoGenerateAudio: config.videoGenerateAudio === "true", videoWatermark: config.videoWatermark === "true" }
-            : mode === "audio"
+    const candidates: Record<string, unknown> =
+        mode === "image"
+            ? { size: config.size, quality: config.quality, transparentBackground: config.transparentBackground === "true", count: Number(config.count) }
+            : mode === "video"
+              ? { size: config.size, videoSeconds: Number(config.videoSeconds), vquality: config.vquality, videoGenerateAudio: config.videoGenerateAudio === "true", videoWatermark: config.videoWatermark === "true" }
+              : mode === "audio"
                 ? { audioVoice: config.audioVoice, audioFormat: config.audioFormat, audioSpeed: Number(config.audioSpeed) }
                 : {};
     return Object.fromEntries(Object.entries(candidates).filter(([key]) => Boolean(spec?.options?.[key])));

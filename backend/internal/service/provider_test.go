@@ -468,6 +468,38 @@ func TestRunImageTaskOmitsAutomaticQualityAndSize(t *testing.T) {
 	}
 }
 
+func TestImageDataURLsAcceptsOpenAIAndAsyncResultURLShapes(t *testing.T) {
+	images, err := imageDataURLs(imageResponse{
+		Data: []map[string]interface{}{
+			{"b64_json": "aGVsbG8=", "mime_type": "image/webp"},
+			{"url": "https://task.example/generated.png"},
+		},
+		ResultURLs: []string{"https://task.example/async-0.png", ""},
+	})
+	if err != nil {
+		t.Fatalf("imageDataURLs() error = %v", err)
+	}
+	want := []string{
+		"data:image/webp;base64,aGVsbG8=",
+		"https://task.example/generated.png",
+		"https://task.example/async-0.png",
+	}
+	if len(images) != len(want) {
+		t.Fatalf("image count = %d, want %d: %#v", len(images), len(want), images)
+	}
+	for index, expected := range want {
+		if images[index]["dataUrl"] != expected {
+			t.Fatalf("image %d = %#v, want %q", index, images[index], expected)
+		}
+	}
+}
+
+func TestImageDataURLsRejectsEmptyOpenAIAndAsyncResults(t *testing.T) {
+	if _, err := imageDataURLs(imageResponse{ResultURLs: []string{"", "  "}}); err == nil || !strings.Contains(err.Error(), "没有返回可用图片") {
+		t.Fatalf("imageDataURLs() error = %v, want empty-result error", err)
+	}
+}
+
 func TestRunGrokImageTaskUsesJSONEditContract(t *testing.T) {
 	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -615,6 +647,9 @@ func TestNormalizePixelSizeConvertsCanvasAspectRatios(t *testing.T) {
 		"16:9": "1824x1024",
 		"9:16": "1024x1824",
 		"21:9": "2352x1008",
+		"2160×3840": "2160x3840",
+		" 2160 x 3840 ": "2160x3840",
+		"2160 X 3840": "2160x3840",
 	}
 	for input, want := range tests {
 		t.Run(input, func(t *testing.T) {

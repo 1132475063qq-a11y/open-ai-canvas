@@ -256,6 +256,7 @@
       "primaryAgentId": "tvc_creative_director",
       "candidateAgentIds": ["tvc_creative_director", "narrative_screenwriter"],
       "skillIds": ["tvc", "screenwriter"],
+      "stepOutputArtifactTypes": [["tvc-creative-brief"], ["tvc-script"]],
       "requiredInputArtifactTypes": ["project-requirements"],
       "optionalInputArtifactTypes": ["tvc-creative-brief"],
       "outputArtifactTypes": ["tvc-script"]

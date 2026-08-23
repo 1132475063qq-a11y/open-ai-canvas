@@ -51,16 +51,17 @@ type ArtifactTypeDefinition struct {
 }
 
 type IntentRouteDefinition struct {
-	ID                         string   `json:"id"`
-	Name                       string   `json:"name"`
-	TriggerPhrases             []string `json:"triggerPhrases"`
-	PrimaryAgentID             string   `json:"primaryAgentId"`
-	CandidateAgentIDs          []string `json:"candidateAgentIds,omitempty"`
-	SkillIDs                   []string `json:"skillIds"`
-	RequiredInputArtifactTypes []string `json:"requiredInputArtifactTypes"`
-	OptionalInputArtifactTypes []string `json:"optionalInputArtifactTypes"`
-	OutputArtifactTypes        []string `json:"outputArtifactTypes"`
-	RequiresDisambiguation     bool     `json:"requiresDisambiguation,omitempty"`
+	ID                         string     `json:"id"`
+	Name                       string     `json:"name"`
+	TriggerPhrases             []string   `json:"triggerPhrases"`
+	PrimaryAgentID             string     `json:"primaryAgentId"`
+	CandidateAgentIDs          []string   `json:"candidateAgentIds,omitempty"`
+	SkillIDs                   []string   `json:"skillIds"`
+	StepOutputArtifactTypes    [][]string `json:"stepOutputArtifactTypes,omitempty"`
+	RequiredInputArtifactTypes []string   `json:"requiredInputArtifactTypes"`
+	OptionalInputArtifactTypes []string   `json:"optionalInputArtifactTypes"`
+	OutputArtifactTypes        []string   `json:"outputArtifactTypes"`
+	RequiresDisambiguation     bool       `json:"requiresDisambiguation,omitempty"`
 }
 
 type HandoffRouteDefinition struct {

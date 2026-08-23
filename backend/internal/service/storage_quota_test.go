@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/repository"
@@ -104,5 +105,72 @@ func TestSaveTaskCompletionPersistsRelatedRowsTogether(t *testing.T) {
 	}
 	if task.Status != model.TaskStatusSucceeded || messageCount != 1 || resultCount != 2 {
 		t.Fatalf("completion = status:%s messages:%d results:%d", task.Status, messageCount, resultCount)
+	}
+}
+
+func TestSaveEcommerceTaskCompletionCreatesResultWithoutSession(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(
+		&model.SystemSetting{}, &model.Asset{}, &model.CanvasProject{}, &model.Session{}, &model.Message{},
+		&model.Task{}, &model.TaskLog{}, &model.Result{}, &model.ApiCallLog{}, &model.TaskTextDelta{},
+		&model.EcommerceProductionRun{}, &model.EcommerceProductionSlot{}, &model.EcommerceProductionAttempt{}, &model.EcommerceArtifact{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	run := model.EcommerceProductionRun{
+		ID: "ecommerce-run-1", UserID: "user-1", ProjectID: "project-1", Status: "generating",
+		OutputCount: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	slot := model.EcommerceProductionSlot{
+		ID: "ecommerce-slot-1", UserID: run.UserID, ProjectID: run.ProjectID, RunID: run.ID,
+		Position: 1, Role: "hero", Status: "running", QAStatus: "PENDING",
+		ActiveAttemptID: "ecommerce-attempt-1", ActiveTaskID: "ecommerce-task-1", CreatedAt: now, UpdatedAt: now,
+	}
+	attempt := model.EcommerceProductionAttempt{
+		ID: "ecommerce-attempt-1", UserID: run.UserID, ProjectID: run.ProjectID, RunID: run.ID, SlotID: slot.ID,
+		AttemptNumber: 1, Kind: "initial", Status: "running", TaskID: "ecommerce-task-1", CreatedAt: now, UpdatedAt: now,
+	}
+	task := model.Task{
+		ID: "ecommerce-task-1", UserID: run.UserID, ProjectID: run.ProjectID, DomainProjectID: run.ProjectID,
+		Type: "canvas_image", Status: model.TaskStatusRunning, Provider: model.TaskProviderEcommerce,
+		InputJSON: `{"mode":"image"}`, CreatedAt: now, UpdatedAt: now,
+	}
+	for _, value := range []any{&run, &slot, &attempt, &task} {
+		if err := db.Create(value).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	svc := &Service{repo: repository.New(db)}
+	payload := []byte(`{"mode":"image","images":[{"url":"/api/resources/generated-1/file","width":1024,"height":1824}]}`)
+	if err := svc.saveTaskCompletionWithinStorageQuota(&task, payload, nil, false); err != nil {
+		t.Fatalf("saveTaskCompletionWithinStorageQuota() error = %v", err)
+	}
+
+	var result model.Result
+	if err := db.Where("task_id = ?", task.ID).First(&result).Error; err != nil {
+		t.Fatal(err)
+	}
+	if result.Kind != model.ResultKindEcommerceAsset {
+		t.Fatalf("result kind = %q, want %q", result.Kind, model.ResultKindEcommerceAsset)
+	}
+	var savedAttempt model.EcommerceProductionAttempt
+	if err := db.First(&savedAttempt, "id = ?", attempt.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if savedAttempt.Status != "succeeded" || savedAttempt.ResultID != result.ID {
+		t.Fatalf("attempt completion = status:%s result:%s", savedAttempt.Status, savedAttempt.ResultID)
+	}
+	var savedSlot model.EcommerceProductionSlot
+	if err := db.First(&savedSlot, "id = ?", slot.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if savedSlot.Status != "qa" || savedSlot.ResultPayloadJSON == "" || savedSlot.ResultURL != "/api/resources/generated-1/file" {
+		t.Fatalf("slot completion = status:%s url:%q payload:%q", savedSlot.Status, savedSlot.ResultURL, savedSlot.ResultPayloadJSON)
 	}
 }

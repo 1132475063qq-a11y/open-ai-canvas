@@ -106,7 +106,10 @@ func imageDimensionGCD(left int, right int) int {
 }
 
 func normalizePixelSize(value string) string {
-	value = strings.TrimSpace(value)
+	// 管理端和部分模型目录会使用排版乘号或在分隔符两侧插入空格；
+	// 在请求边界统一成供应商普遍接受的 ASCII `宽x高`。
+	value = strings.ToLower(strings.ReplaceAll(value, "×", "x"))
+	value = strings.Join(strings.Fields(value), "")
 	if value == "" || value == "auto" {
 		return ""
 	}

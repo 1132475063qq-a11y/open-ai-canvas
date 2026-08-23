@@ -169,6 +169,50 @@ func (r *Repository) ResourceReferenceSnapshot(userID string, excludingAssetID s
 		snapshot.Documents = append(snapshot.Documents, ResourceReferenceDocument{Kind: "工作流", ID: step.ID, Title: step.Title, PrimaryJSON: step.PrimaryJSON, SecondaryJSON: step.SecondaryJSON})
 	}
 
+	var videoVisualQCQuotes []joinedDocument
+	quoteQuery := r.db.Table("film_video_visual_qc_quotes").
+		Select("id, '视频视觉 QC 报价' AS title, sample_frames_json AS primary_json, reference_resource_ids_json AS secondary_json").
+		Where("user_id = ?", userID)
+	if err := resourceTextQuery(quoteQuery, []string{"sample_frames_json", "reference_resource_ids_json"}, resourceIDs).Scan(&videoVisualQCQuotes).Error; err != nil {
+		return snapshot, err
+	}
+	for _, quote := range videoVisualQCQuotes {
+		snapshot.Documents = append(snapshot.Documents, ResourceReferenceDocument{Kind: "短剧制作", ID: quote.ID, Title: quote.Title, PrimaryJSON: quote.PrimaryJSON, SecondaryJSON: quote.SecondaryJSON})
+	}
+
+	var videoVisualQCAttempts []joinedDocument
+	attemptQuery := r.db.Table("film_video_visual_qc_attempts").
+		Select("id, '视频视觉 QC Attempt' AS title, sample_frames_json AS primary_json").
+		Where("user_id = ?", userID)
+	if err := resourceTextQuery(attemptQuery, []string{"sample_frames_json"}, resourceIDs).Scan(&videoVisualQCAttempts).Error; err != nil {
+		return snapshot, err
+	}
+	for _, attempt := range videoVisualQCAttempts {
+		snapshot.Documents = append(snapshot.Documents, ResourceReferenceDocument{Kind: "短剧制作", ID: attempt.ID, Title: attempt.Title, PrimaryJSON: attempt.PrimaryJSON})
+	}
+
+	var sequenceVisualQCQuotes []joinedDocument
+	sequenceQuoteQuery := r.db.Table("film_video_sequence_visual_qc_quotes").
+		Select("id, '整组视频连续性 QC 报价' AS title, slot_evidence_json AS primary_json, reference_resource_ids_json AS secondary_json").
+		Where("user_id = ?", userID)
+	if err := resourceTextQuery(sequenceQuoteQuery, []string{"slot_evidence_json", "reference_resource_ids_json"}, resourceIDs).Scan(&sequenceVisualQCQuotes).Error; err != nil {
+		return snapshot, err
+	}
+	for _, quote := range sequenceVisualQCQuotes {
+		snapshot.Documents = append(snapshot.Documents, ResourceReferenceDocument{Kind: "短剧制作", ID: quote.ID, Title: quote.Title, PrimaryJSON: quote.PrimaryJSON, SecondaryJSON: quote.SecondaryJSON})
+	}
+
+	var sequenceVisualQCAttempts []joinedDocument
+	sequenceAttemptQuery := r.db.Table("film_video_sequence_visual_qc_attempts").
+		Select("id, '整组视频连续性 QC Attempt' AS title, slot_evidence_json AS primary_json").
+		Where("user_id = ?", userID)
+	if err := resourceTextQuery(sequenceAttemptQuery, []string{"slot_evidence_json"}, resourceIDs).Scan(&sequenceVisualQCAttempts).Error; err != nil {
+		return snapshot, err
+	}
+	for _, attempt := range sequenceVisualQCAttempts {
+		snapshot.Documents = append(snapshot.Documents, ResourceReferenceDocument{Kind: "短剧制作", ID: attempt.ID, Title: attempt.Title, PrimaryJSON: attempt.PrimaryJSON})
+	}
+
 	type joinedRepresentation struct {
 		ID         string
 		Title      string
@@ -193,6 +237,32 @@ func (r *Repository) ResourceReferenceSnapshot(userID string, excludingAssetID s
 	}
 	for _, voice := range voices {
 		snapshot.Direct = append(snapshot.Direct, ResourceDirectReference{Kind: "声音", ID: voice.ID, Title: voice.Name, ResourceID: voice.SampleResourceID})
+	}
+
+	type filmVideoVisualQCSourceReference struct {
+		ID         string
+		Title      string
+		ResourceID string
+	}
+	var videoSources []filmVideoVisualQCSourceReference
+	if err := r.db.Table("film_video_visual_qc_quotes").
+		Select("id, '视频视觉 QC 报价来源视频' AS title, source_resource_id AS resource_id").
+		Where("user_id = ? AND source_resource_id IN ?", userID, resourceIDs).
+		Scan(&videoSources).Error; err != nil {
+		return snapshot, err
+	}
+	for _, source := range videoSources {
+		snapshot.Direct = append(snapshot.Direct, ResourceDirectReference{Kind: "短剧制作", ID: source.ID, Title: source.Title, ResourceID: source.ResourceID})
+	}
+	videoSources = nil
+	if err := r.db.Table("film_video_visual_qc_attempts").
+		Select("id, '视频视觉 QC 来源视频' AS title, source_resource_id AS resource_id").
+		Where("user_id = ? AND source_resource_id IN ?", userID, resourceIDs).
+		Scan(&videoSources).Error; err != nil {
+		return snapshot, err
+	}
+	for _, source := range videoSources {
+		snapshot.Direct = append(snapshot.Direct, ResourceDirectReference{Kind: "短剧制作", ID: source.ID, Title: source.Title, ResourceID: source.ResourceID})
 	}
 	return snapshot, nil
 }

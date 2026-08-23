@@ -27,7 +27,7 @@ const SNAP_THRESHOLD_PX = 8;
 const BASE_PX_PER_SECOND = 96;
 
 type CanvasTimelineDialogProps = {
-    node: CanvasNodeData;
+    node: Pick<CanvasNodeData, "id" | "title">;
     open: boolean;
     nodes: CanvasNodeData[];
     timeline: TimelineProject | null;

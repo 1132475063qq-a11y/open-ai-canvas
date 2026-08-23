@@ -1,9 +1,11 @@
+import { useQuery } from "@tanstack/react-query";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Link, useLocation } from "react-router";
 
 import { SystemAnnouncementCenter } from "@/components/layout/system-announcement-center";
 import { WorkspaceAccountMenu } from "@/components/layout/workspace-account-menu";
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
+import { getProject } from "@/services/api/projects";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -11,6 +13,7 @@ const PAGE_TITLES: Record<string, string> = {
     home: "首页",
     create: "创作",
     projects: "短剧创作",
+    ecommerce: "电商创意",
     canvas: "画布",
     tasks: "任务",
     assets: "素材",
@@ -25,8 +28,11 @@ export function WorkspaceTopBar({ sidebarOpen, onToggleSidebar }: { sidebarOpen:
     const user = useUserStore((state) => state.user);
     const { pathname } = useLocation();
 
-    const slug = pathname.split("/").filter(Boolean)[0];
-    const pageTitle = (slug && PAGE_TITLES[slug]) || "影策";
+    const pathParts = pathname.split("/").filter(Boolean);
+    const slug = pathParts[0];
+    const projectId = slug === "projects" ? pathParts[1] : undefined;
+    const projectQuery = useQuery({ queryKey: ["project", projectId], queryFn: () => getProject(projectId || ""), enabled: Boolean(projectId), staleTime: 30_000 });
+    const pageTitle = projectQuery.data?.project.type === "ecommerce" ? "电商创意" : (slug && PAGE_TITLES[slug]) || "影策";
 
     return (
         <header className="app-workspace-topbar flex shrink-0 items-center justify-between gap-3 px-3 sm:px-4">

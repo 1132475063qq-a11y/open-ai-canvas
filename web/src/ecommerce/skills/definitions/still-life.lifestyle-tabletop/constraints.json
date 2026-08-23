@@ -1,0 +1,5 @@
+{
+    "must_preserve": ["confirmed product facts", "logo identity"],
+    "forbidden_changes": ["invented logo text", "occluded product hero surface"],
+    "text_safe_zones_required": true
+}

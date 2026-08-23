@@ -96,10 +96,11 @@ type providerMedia struct {
 }
 
 type imageResponse struct {
-	Data  []map[string]interface{} `json:"data"`
-	Error *providerError           `json:"error"`
-	Code  *int                     `json:"code"`
-	Msg   string                   `json:"msg"`
+	Data       []map[string]interface{} `json:"data"`
+	ResultURLs []string                 `json:"result_urls"`
+	Error      *providerError           `json:"error"`
+	Code       *int                     `json:"code"`
+	Msg        string                   `json:"msg"`
 }
 
 type providerError struct {
@@ -228,7 +229,8 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 	if isVolcengineJiMengProtocol(input.Config.InterfaceType) && strings.TrimSpace(input.Config.SecretKey) == "" {
 		return nil, errors.New("即梦官方 API 缺少 Secret Key")
 	}
-	if input.Mode == "image" {
+	isEcommerceImage := input.Mode == "image" && metadataString(input.Metadata, "domain") == "ecommerce"
+	if input.Mode == "image" && !isEcommerceImage {
 		if err := s.validateResolvedImageCapability(&input); err != nil {
 			return nil, err
 		}
@@ -241,6 +243,18 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 	if resumedProviderRequestID(ctx) == "" {
 		requirePublicURL := input.Config.InterfaceType == "newapi-channel-1" || input.Config.InterfaceType == "newapi-channel-2" || input.Config.InterfaceType == string(model.ChannelInterfaceVolcengineArkVideo) || input.Config.InterfaceType == string(model.ChannelInterfaceMiniMaxVideo)
 		if err := s.hydrateGenerationMedia(userID, &input, requirePublicURL); err != nil {
+			return nil, err
+		}
+		if isEcommerceImage {
+			if err := compactEcommerceProviderImages(&input); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if isEcommerceImage {
+		// Validate after hydration so the capability check sees the actual
+		// outbound bytes, including the bounded ecommerce reference copy.
+		if err := s.validateResolvedImageCapability(&input); err != nil {
 			return nil, err
 		}
 	}
@@ -898,7 +912,28 @@ func runImageTask(ctx context.Context, input canvasGenerationInput) (map[string]
 	if err != nil {
 		return nil, err
 	}
+	if metadataString(input.Metadata, "domain") == "ecommerce" {
+		images = materializeEcommerceImageResults(ctx, input.Config, images)
+	}
 	return map[string]interface{}{"mode": "image", "images": images}, nil
+}
+
+func materializeEcommerceImageResults(ctx context.Context, config providerConfig, images []map[string]string) []map[string]string {
+	for _, image := range images {
+		source := strings.TrimSpace(image["dataUrl"])
+		if !isPublicMediaURL(source) {
+			continue
+		}
+		data, mimeType, err := getProviderExternalBinary(ctx, config, source)
+		if err != nil || len(data) == 0 {
+			// Keep the provider URL so the user can still inspect it. The ecommerce
+			// completion path will mark the result UNCERTAIN when dimensions cannot
+			// be verified instead of treating an inaccessible URL as 4K output.
+			continue
+		}
+		image["dataUrl"] = dataURL(normalizedMediaMimeType(mimeType, data), data)
+	}
+	return images
 }
 
 func runGeminiImageTask(ctx context.Context, input canvasGenerationInput) (map[string]interface{}, error) {
@@ -3519,17 +3554,23 @@ func mediaBytes(media providerMedia) ([]byte, string, error) {
 }
 
 func imageDataURLs(payload imageResponse) ([]map[string]string, error) {
-	if len(payload.Data) == 0 {
-		return nil, errors.New("接口没有返回图片")
-	}
-	images := make([]map[string]string, 0, len(payload.Data))
+	images := make([]map[string]string, 0, len(payload.Data)+len(payload.ResultURLs))
 	for _, item := range payload.Data {
 		if b64, ok := item["b64_json"].(string); ok && b64 != "" {
-			images = append(images, map[string]string{"dataUrl": "data:image/png;base64," + b64})
+			mimeType, _ := item["mime_type"].(string)
+			if strings.TrimSpace(mimeType) == "" {
+				mimeType = "image/png"
+			}
+			images = append(images, map[string]string{"dataUrl": "data:" + strings.TrimSpace(mimeType) + ";base64," + b64})
 			continue
 		}
 		if url, ok := item["url"].(string); ok && url != "" {
 			images = append(images, map[string]string{"dataUrl": url})
+		}
+	}
+	for _, url := range payload.ResultURLs {
+		if strings.TrimSpace(url) != "" {
+			images = append(images, map[string]string{"dataUrl": strings.TrimSpace(url)})
 		}
 	}
 	if len(images) == 0 {

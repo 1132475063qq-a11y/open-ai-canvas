@@ -9,8 +9,10 @@ import { modelProtocolCapability, normalizeModelProtocol, type ModelProtocol } f
 import { normalizeVideoDuration, normalizeVideoResolution } from "@/lib/video-generation-options";
 import type { ModelCapabilityConfig } from "@/lib/model-capabilities";
 import { useLocalDreaminaModelStore } from "@/stores/use-local-dreamina-model-store";
+import { useLocalRuntimeStore } from "@/stores/use-local-runtime-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { DreaminaLocalModel } from "@/services/local-dreamina-model-catalog";
+import type { CodexLocalModel } from "@/services/local-codex-cli";
 import type { CapabilitySpec } from "@/services/api/logical-models";
 
 export type ApiCallFormat = "openai" | "gemini";
@@ -56,7 +58,7 @@ export type ModelChannel = {
         defaultOptions?: Record<string, unknown>;
     }>;
     transport?: "backend-channel" | "local-runtime";
-    localModels?: DreaminaLocalModel[];
+    localModels?: Array<DreaminaLocalModel | CodexLocalModel>;
 };
 
 export type AiConfig = {
@@ -89,6 +91,8 @@ export type AiConfig = {
     transparentBackground: string;
     count: string;
     canvasImageCount: string;
+    localCodexModels: string[];
+    localCodexDefaultModel: string;
 };
 
 export const CONFIG_STORE_KEY = "open_ai_canvas:ai_config_store";
@@ -129,6 +133,8 @@ export const defaultConfig: AiConfig = {
     transparentBackground: "false",
     count: "1",
     canvasImageCount: "1",
+    localCodexModels: ["gpt-5.5"],
+    localCodexDefaultModel: "gpt-5.5",
 };
 
 type ConfigStore = {
@@ -312,6 +318,8 @@ export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefine
     const videoModels = filterModelsByCapability(models, "video", channels);
     const textModels = filterModelsByCapability(models, "text", channels);
     const audioModels = filterModelsByCapability(models, "audio", channels);
+    const localCodexModels = normalizeLocalCodexModels(persistedConfig.localCodexModels);
+    const localCodexDefaultModel = localCodexModels.includes(persistedConfig.localCodexDefaultModel || "") ? persistedConfig.localCodexDefaultModel! : localCodexModels[0] || "";
     const model = normalizeSelectedModel(config.model || config.imageModel || config.textModel, channels, models);
     return {
         config: {
@@ -341,6 +349,8 @@ export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefine
             videoModels,
             textModels,
             audioModels,
+            localCodexModels,
+            localCodexDefaultModel,
         },
     };
 }
@@ -355,7 +365,13 @@ export function useEffectiveConfig() {
     const customChannelsEnabled = useUserStore((state) => state.features.customChannelsEnabled);
     const catalogState = useLocalDreaminaModelStore((state) => state.state);
     const dreaminaModels = useLocalDreaminaModelStore((state) => state.models);
-    return useMemo(() => effectiveConfigWithDreamina(effectiveConfigForCustomChannels(config, customChannelsEnabled), catalogState, dreaminaModels), [catalogState, config, customChannelsEnabled, dreaminaModels]);
+    const runtimeConnection = useLocalRuntimeStore((state) => state.connection);
+    const runtimeModules = useLocalRuntimeStore((state) => state.modules);
+    return useMemo(() => {
+        const base = effectiveConfigWithDreamina(effectiveConfigForCustomChannels(config, customChannelsEnabled), catalogState, dreaminaModels);
+        const codexReady = runtimeConnection === "connected" && runtimeModules.some((module) => module.id === "canvas-agent");
+        return effectiveConfigWithCodex(base, codexReady, config.localCodexModels);
+    }, [catalogState, config, customChannelsEnabled, dreaminaModels, runtimeConnection, runtimeModules]);
 }
 
 export function effectiveConfigForCustomChannels(config: AiConfig, customChannelsEnabled: boolean): AiConfig {
@@ -392,6 +408,36 @@ export function effectiveConfigWithDreamina(config: AiConfig, catalogState: "idl
     };
 }
 
+export function effectiveConfigWithCodex(config: AiConfig, runtimeReady: boolean, modelNames: string[]): AiConfig {
+    if (!runtimeReady || !modelNames.length) return config;
+    const models = modelNames.filter((model) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model));
+    if (!models.length) return config;
+    const localModels: CodexLocalModel[] = models.map((id) => ({ provider: "openai-codex-cli", id, displayName: id, modality: "text", source: "local-settings" }));
+    const channel: ModelChannel = {
+        id: "local:codex-cli",
+        name: "GPT CLI",
+        baseUrl: "",
+        apiKey: "",
+        apiFormat: "openai",
+        models,
+        scope: "user",
+        enabled: true,
+        transport: "local-runtime",
+        localModels,
+    };
+    const channels = [...config.channels.filter((item) => item.id !== channel.id), channel];
+    const options = modelOptionsFromChannels(channels);
+    return {
+        ...config,
+        channels,
+        models: options,
+        imageModels: filterModelsByCapability(options, "image", channels),
+        videoModels: filterModelsByCapability(options, "video", channels),
+        textModels: filterModelsByCapability(options, "text", channels),
+        audioModels: filterModelsByCapability(options, "audio", channels),
+    };
+}
+
 export function createModelChannel(channel?: Partial<ModelChannel>): ModelChannel {
     const apiFormat = normalizeApiFormat(channel?.apiFormat);
     const interfaceType = normalizeChannelInterfaceType(channel?.interfaceType);
@@ -424,8 +470,8 @@ export function isChannelModelValue(value: string) {
 }
 
 export function decodeChannelModel(value: string) {
-    const local = /^local:dreamina-cli:([A-Za-z0-9][A-Za-z0-9._:-]{0,119})$/.exec(value.trim());
-    if (local) return { channelId: "local:dreamina-cli", model: local[1] };
+    const local = /^local:(dreamina-cli|codex-cli):([A-Za-z0-9][A-Za-z0-9._:-]{0,119})$/.exec(value.trim());
+    if (local) return { channelId: `local:${local[1]}`, model: local[2] };
     const index = value.indexOf(CHANNEL_MODEL_SEPARATOR);
     if (index < 0) return null;
     return { channelId: value.slice(0, index), model: value.slice(index + CHANNEL_MODEL_SEPARATOR.length) };
@@ -465,7 +511,7 @@ export function modelOptionsFromChannels(channels: ModelChannel[]) {
                 .map(normalizeRawModelName)
                 .filter(Boolean)
                 .filter((model) => channel.scope !== "system" || hasSystemModelPrice(channel, model))
-                .map((model) => (channel.transport === "local-runtime" ? `local:dreamina-cli:${model}` : encodeChannelModel(channel.id, model))),
+                .map((model) => (channel.transport === "local-runtime" ? `${channel.id}:${model}` : encodeChannelModel(channel.id, model))),
         ),
     );
 }
@@ -588,6 +634,18 @@ function normalizeChannelInterfaceType(value: unknown): ChannelInterfaceType | u
 
 function uniqueRawModels(models: string[]) {
     return Array.from(new Set((models || []).map(normalizeRawModelName).filter(Boolean)));
+}
+
+function normalizeLocalCodexModels(value: unknown) {
+    const models = Array.isArray(value) ? value : defaultConfig.localCodexModels;
+    return Array.from(
+        new Set(
+            models
+                .filter((model): model is string => typeof model === "string")
+                .map((model) => model.trim())
+                .filter((model) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model)),
+        ),
+    );
 }
 
 function uniqueModelOptions(models: string[]) {

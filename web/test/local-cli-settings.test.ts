@@ -244,4 +244,6 @@ const compactCopyContract = {
     dreaminaCancel: "官方 Dreamina CLI 当前不提供取消命令；官方已接受的任务只能转入后台继续同步，不能伪装成已取消。",
     dreaminaAccountSwitch: "本机任务运行期间，请不要在其他程序中切换 Dreamina CLI 账号；外部换号无法被本页面实时感知。",
     dreaminaRefresh: "刷新状态",
+    codexDescription: "使用本机 OpenAI Codex CLI 作为文本模型；不在项目中保存 API Key。",
+    codexSafety: "GPT CLI 文本会话使用只读沙箱，不加载画布工具；你的 Codex 登录态和配置只保留在本机。",
 } as const;

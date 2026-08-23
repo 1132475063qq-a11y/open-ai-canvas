@@ -64,7 +64,8 @@ Recorded on 2026-08-21 before convergence changes:
 ## Current Convergence Verification
 
 Recorded on 2026-08-21 on `codex/converged-runtime` after the Film Executor,
-durable Handoff, and orchestration-closeout slices:
+durable Handoff, orchestration-closeout, and single-Shot image production
+slices:
 
 - `go vet ./...`: pass.
 - AgentRuntime, database, repository, handler, server, and all Film service
@@ -75,8 +76,11 @@ durable Handoff, and orchestration-closeout slices:
 - Film registry startup validation: exactly 9 Agents, 17 Skills, 15 intent
   routes, 11 handoff routes, and 46 canonical Artifact types.
 - Film Run service tests: all 15 intent routes compile to owned Agent/Skill
-  Steps; create, idempotency, locked inputs, human pause/resume, append-only
+  Steps and execute through the durable Claim -> Attempt -> validated Artifact
+  contract; create, idempotency, locked inputs, human pause/resume, append-only
   retry, archived-history reads, secret rejection, and domain isolation pass.
+  Real external-provider integration remains covered by the single-shot route
+  only until the wider route set has approved fixtures.
 - Film HTTP contract: authenticated catalog, create, replay, list, detail, and
   decision resolution and immutable Artifact lock pass; unauthorized,
   invalid-limit, missing-idempotency, stale revision, and oversized-body
@@ -97,14 +101,36 @@ durable Handoff, and orchestration-closeout slices:
   `project-summary`, appends both orchestration Events, and archives the
   project. Stale evidence, another root, another user, or post-archive writes
   are rejected without partial state.
+- Film image production is provider-backed and evidence-complete for one Shot:
+  current locked storyboard/prompt/feasibility revisions produce a ten-minute
+  route-and-price-frozen quote; explicit confirmation atomically reserves
+  credit and creates Task/Attempt/Artifact/Event facts; Worker success requires
+  one accessible persisted image and atomically creates Result, locked
+  `generation-result`, and system hold QC before human acceptance.
+- Film quote expiry, price/capability drift, permissions, create/submit/QC
+  idempotency, missing-media rejection, generic-retry rejection, no automatic
+  route fallback, append-only paid retry, queued cancellation, and refund are
+  covered by focused integration tests. The four production HTTP paths have
+  authenticated contract coverage.
+- Film image visual QC now has its own route-and-price-frozen quote, Task,
+  Attempt, billing history, strict eight-dimension model report, and locked QC
+  Artifact. A local multimodal Provider test proves the generated Result is the
+  first image, model output cannot auto-accept, cancellation refunds, parallel
+  Attempts are rejected, and malformed paid output becomes `uncertain` without
+  automatic retry. Commercial-model visual acceptance remains open.
 - Focused repository/service closeout race tests pass. The AgentTeam authority
   package's `validate_goal_acceptance.py` also passes unchanged.
 
 The five failures above remain upstream baseline issues and currently reproduce
 in this network/runtime environment. They do not touch the Film runtime paths.
 
-See `film-runtime-control-plane.md` for the implemented API and the exact
-boundary between durable control-plane evidence and real Agent execution.
+See `film-runtime-control-plane.md` for the implemented APIs and the exact
+boundary between deterministic visual-QC evidence and the still-open
+commercial multi-scene acceptance, finishing, and release work.
+
+See `ecommerce-provider-evaluation.md` for the Ecommerce Provider bake-off
+record contract and its boundary between durable evaluation data and real
+commercial evidence.
 
 Use the package-native commands. In this development environment, invoke the
 bundled Node executable explicitly for `canvas-agent`; `bun test` is not a

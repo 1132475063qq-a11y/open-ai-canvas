@@ -152,6 +152,7 @@ export default function ProjectsPage() {
     const rows = useMemo(() => {
         const normalizedKeyword = keyword.trim().toLowerCase();
         return [...(query.data?.projects || [])]
+            .filter(({ project }) => project.type === "short-drama")
             .filter(({ project }) => status === "all" || project.status === status)
             .filter(({ project }) => !normalizedKeyword || `${project.name} ${project.description} ${project.stylePresetId} ${parseStyleProfile(project.styleProfileJson)?.title || resolveCanvasStylePreset(project.stylePresetId)?.title || ""}`.toLowerCase().includes(normalizedKeyword))
             .sort((left, right) => {

@@ -6,6 +6,7 @@ import { isFrameNode } from "@/lib/canvas/canvas-frame";
 import { nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { canvasResourceMentionToken, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { scopedLocalStorage } from "@/lib/user-scope";
+import { createEcommerceState, type EcommerceDomainRef, type EcommerceNodeKind, type EcommerceState } from "@/ecommerce/domain/types";
 import type { GenerationTask } from "@/services/api/task-center";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type CanvasWorkspaceMode, type ConnectionHandle, type Position, type StoryboardColumn, type StoryboardRow } from "@/types/canvas";
 
@@ -47,6 +48,23 @@ export function createCanvasNode(type: CanvasNodeType, position: Position, metad
         metadata: type === CanvasNodeType.Script
             ? { ...spec.metadata, ...metadata, storyboard: metadata?.storyboard || { rows: [1, 2, 3].map((shotNumber) => createStoryboardRow(shotNumber)), visibleColumns: ["shotNumber", "durationSeconds", "plotDescription", "dialogue"], referenceNodeIds: [] } }
             : { ...spec.metadata, ...metadata, ...(type === CanvasNodeType.Drawing ? { drawingId: metadata?.drawingId || `${id}-document` } : {}) },
+    };
+}
+
+export function createEcommerceCanvasNode(
+    type: CanvasNodeType,
+    ecommerceKind: EcommerceNodeKind,
+    position: Position,
+    ecommerceRef: EcommerceDomainRef,
+    metadata?: CanvasNodeMetadata,
+    state?: Partial<EcommerceState>,
+): CanvasNodeData {
+    const node = createCanvasNode(type, position, metadata);
+    return {
+        ...node,
+        ecommerceKind,
+        ecommerceRef,
+        ecommerceState: createEcommerceState(state),
     };
 }
 

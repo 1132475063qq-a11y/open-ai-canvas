@@ -138,6 +138,25 @@ func RegisterFilmAgentRuntimeRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, result)
 	})
+	film.POST("/agent-runs/:runId/artifacts/:artifactId/rollback", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, filmAgentDecisionRequestLimit)
+		var request service.RollbackFilmAgentArtifactRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			failFilmAgentBind(c, err)
+			return
+		}
+		result, err := svc.RollbackFilmAgentArtifact(user.ID, c.Param("id"), c.Param("runId"), c.Param("artifactId"), c.GetHeader("X-Idempotency-Key"), request)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
 	film.GET("/agent-runs/:runId/closeout", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

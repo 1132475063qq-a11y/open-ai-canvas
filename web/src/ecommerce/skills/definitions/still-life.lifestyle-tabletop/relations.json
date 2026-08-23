@@ -1,0 +1,7 @@
+{
+    "relations": [
+        { "from": "{{product}}", "relation": "rests_on", "to": "{{surface}}" },
+        { "from": "{{props}}", "relation": "does_not_occlude", "to": "{{product}}" },
+        { "from": "{{logo}}", "relation": "visible_from", "to": "{{camera}}" }
+    ]
+}

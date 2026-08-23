@@ -2,6 +2,7 @@ const workspaceRouteLoaders = {
     assets: () => import("@/pages/assets"),
     canvas: () => import("@/pages/canvas"),
     create: () => import("@/pages/create"),
+    ecommerce: () => import("@/pages/ecommerce"),
     projects: () => import("@/pages/projects"),
     wallet: () => import("@/pages/wallet"),
 };
@@ -9,6 +10,7 @@ const workspaceRouteLoaders = {
 export const loadAssetsPage = workspaceRouteLoaders.assets;
 export const loadCanvasPage = workspaceRouteLoaders.canvas;
 export const loadCreatePage = workspaceRouteLoaders.create;
+export const loadEcommercePage = workspaceRouteLoaders.ecommerce;
 export const loadProjectsPage = workspaceRouteLoaders.projects;
 export const loadWalletPage = workspaceRouteLoaders.wallet;
 

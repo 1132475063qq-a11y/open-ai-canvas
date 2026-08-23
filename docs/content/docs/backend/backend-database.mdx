@@ -1,0 +1,86 @@
+---
+title: 后端数据库
+description: 影策后端持久化表、Film Agent Runtime 与短剧生产事实合同。
+---
+
+# 后端数据库
+
+后端使用 GORM，SQLite 与 PostgreSQL 共用
+`backend/internal/database/schema.go` 中的 `Models()` 作为表清单。服务启动时
+`MigrateSchema` 执行增量 `AutoMigrate`；新增字段和索引不会替代上线前备份，也不提供自动降级迁移。
+
+## Film Agent Runtime
+
+| 表 | 职责 | 关键约束 |
+|---|---|---|
+| `agent_runtime_runs` | 一次 Intent 或 Handoff 编排运行 | 用户幂等键唯一；固定 Registry 版本和根运行血缘 |
+| `agent_runtime_steps` | Agent/Skill 或确定性编排步骤 | 同一 Run 的 `step_key` 唯一；状态变化受 revision fence 约束 |
+| `agent_runtime_attempts` | Step 执行历史 | 同一 Step 的 Attempt 序号唯一；重试新增记录 |
+| `agent_routing_decisions` | 意图与交接路由事实 | 保存所选 Agent、Skill、输入 Artifact 和理由 |
+| `agent_human_decisions` | 人工暂停与恢复事实 | 待处理、已解决和已取消状态不可由 Agent 伪造 |
+| `agent_runtime_events` | 有序运行事件 | 同一 Run 的 sequence 唯一，只追加 |
+| `agent_handoff_triggers` | Artifact 锁定后的耐久 Outbox | 每个输入 revision 只产生一个 Trigger，可租约恢复 |
+| `production_artifacts` | 稳定的逻辑产物身份 | 项目、领域和 logical key 唯一，只指向当前 revision |
+| `production_artifact_revisions` | 不可变产物内容 | 同一 Artifact 的版本号唯一；内容带 SHA-256 摘要和来源血缘 |
+
+## 短剧图片生产
+
+| 表 | 职责 | 关键约束 |
+|---|---|---|
+| `film_production_quotes` | 单镜头生成报价 | 冻结 Artifact revision、Registry、逻辑模型、物理路由、能力版本、价格版本、请求和费用；十分钟失效 |
+| `film_production_attempts` | 一次付费执行事实 | Quote、Task 各自唯一；同一镜头序号唯一；付费重试新增 Attempt |
+| `film_visual_qc_quotes` | 图片视觉语义 QC 报价 | 冻结生成结果、三类制作证据、图片输入文本模型路由、能力版本、价格和参考图顺序 |
+| `film_visual_qc_attempts` | 一次模型视觉 QC 执行事实 | 同一来源图片的序号唯一；Quote、Task 各自唯一；失败或复检必须重新报价 |
+| `film_production_qc_reports` | 系统与人工 QC 历史 | 用户幂等键唯一，只追加；系统 `NOT_ASSESSABLE/hold` 不等于人工通过 |
+| `results` | 可访问媒体结果 | Film 结果关联 Attempt、项目和 Artifact revision，并显式记录可用性 |
+
+报价只保存 `resource:<id>` 参考图和生成参数，不保存 data URL、远程 URL 或 Provider 密钥。提交前会在同一事务中复核资源归属、`ready` 状态、图片 Kind/MIME、大小和宽高；任一事实漂移都会在扣费及创建 Task 前返回冲突。
+
+报价提交以一个事务写入额度预留、`billing_orders`、`credit_ledger_entries`、Task、Film Attempt、`generation-attempt` Artifact 和运行事件。Worker 成功同样以一个事务写入 Result、`generation-result`、系统 QC、`generation-qc-report`、Attempt 终态和事件。缺少恰好一张可访问图片时不得提交成功事实。
+
+视觉语义 QC 只允许使用声明至少一张图片输入能力的文本逻辑模型。第一张模型证据固定为本次生成结果，后续才是人物、道具或场景参考；模型必须按 `identity`、`anatomy`、`contact`、`acting`、`props`、`scene`、`composition`、`visual_continuity` 八个维度返回严格 JSON。模型报告无论 `PASS | UNCERTAIN | FAIL` 都固定为 `hold`，只有新的人工 `PASS/accept` 报告才能使图片进入视频阶段。模型已返回但结构化报告保存失败时，Attempt 与费用进入 `uncertain`，不得自动重发。
+
+## 短剧视频生产
+
+| 表 | 职责 | 关键约束 |
+|---|---|---|
+| `film_video_sequences` | 已接受图片组成的 9:16 镜头序列 | 固定根 Run、Registry 和锁定的视频 Prompt revision；用户幂等键唯一 |
+| `film_video_slots` | 序列中的单镜头生成槽位 | 同一 Sequence 的位置唯一；固定 Shot、来源图片 Result/Artifact 和逐镜 Prompt |
+| `film_video_quotes` | 单槽位图片转视频报价 | 冻结 Sequence/Slot revision、来源图片、模型路由、能力版本、价格版本、请求和费用 |
+| `film_video_attempts` | 单槽位视频执行历史 | Quote、Task 各自唯一；同一 Slot 的 Attempt 序号唯一；重试只追加 |
+| `film_video_visual_qc_quotes` | 单视频视觉语义 QC 报价 | 冻结现行视频 Result revision、来源图片与 Prompt revision、3-8 张有序采样帧、文本多模态路由、价格和费用 |
+| `film_video_visual_qc_attempts` | 一次付费视频模型 QC 执行 | 同一来源视频序号唯一；Quote、Task 各自唯一；`queued/running/uncertain` 阻止并行付费复检 |
+| `film_video_sequence_visual_qc_quotes` | 整组跨镜头视觉连续性 QC 报价 | 冻结 Sequence、Ledger、Prompt、每个现行视频 Result/来源图片 revision、逐槽位首尾帧、文本多模态路由、价格和费用 |
+| `film_video_sequence_visual_qc_attempts` | 一次付费整组模型连续性 QC | 同一 Sequence 序号唯一；Quote、Task 各自唯一；结构错误的付费输出进入 `uncertain`，复检必须重新报价 |
+| `film_video_qc_reports` | 视频系统与人工 QC 历史 | 技术媒体 QC 与人工媒体验收分离；人工 `PASS/accept` 才能完成槽位 |
+| `film_video_sequence_reviews` | 模型建议与人工整组裁决历史 | 只追加；模型固定 `source=model/action=hold`，仅人工现行 `PASS/accept` 可完成 Sequence 和 Ledger |
+| `film_continuity_ledgers` | 单个 Sequence 的连续性预检 | 明示 `structured_only` 媒体状态，关联不可变 `continuity-ledger` Artifact |
+| `film_continuity_shot_states` | 逐镜 read-in/write-out 与 Reference Lock | 同一 Ledger 的镜头位置唯一；记录九类连续性维度是否已验证 |
+| `film_continuity_issues` | 可定位连续性问题 | 保存镜头、维度、严重度、权威来源、责任 Agent 与修复状态 |
+| `film_rework_events` | QC 产生的最小返工范围 | 每个 QC 报告最多一个事件；指向 Slot/Shot/Attempt/Result 和复检门槛 |
+
+视频序列只能引用已由人工 `PASS/accept` 的 Film 图片 Attempt。每个槽位独立报价、确认、扣费、执行、取消和重试；刷新后由 Sequence、Slot、Attempt、Task、Billing 与 Result 聚合恢复。来源图片、Prompt、Registry、模型路由或价格发生漂移时，提交会在扣费前原子拒绝。
+
+Provider 返回的视频必须先落为受管资源，再写入 `film_video_generation_result` Result 和锁定的 `generation-result` Artifact。系统技术 QC 校验媒体 URL、资源身份、视频 MIME，并在元数据可用时检查画幅和时长。确凿的画幅/时长错误会创建槽位级 `rework-event` 并阻止人工直接接受。
+
+单视频模型视觉 QC 使用浏览器按时间顺序截取并上传的 3-8 张受管帧，固定检查 `identity`、`anatomy`、`contact`、`acting`、`props`、`scene`、`composition`、`motion`、`temporal_continuity`、`lip_sync_audio` 十个维度。后端冻结时间点、资源元数据和来源视频 revision，但因没有原生解码视频，不声称独立证明采样帧来源，也不能仅凭稀疏帧证明连续运动或音频事实。模型输出只能形成 `PASS | UNCERTAIN | FAIL` 的 `hold` 报告；人工 QC 仍是唯一接受入口。旧视频版本产生后，旧模型报告保留但返回 `valid: false`。采样帧、来源视频、模型或价格漂移会在扣费前拒绝提交，结构错误的付费输出进入 `uncertain` 且禁止通用重试。
+
+整组模型连续性 QC 为每个已人工接受的槽位冻结浏览器截取的首帧和尾帧，按顺序检查人物、服装、道具、场景、轴线、动作、光色、运动转场以及口型/音频连续性，并要求逐相邻镜头返回 Transition 裁决。当前没有附带音轨，因此口型/音频维度必须为 `UNCERTAIN`。模型结果写成追加式 `sequence-review` Artifact，但固定为 `hold`，不得使 Ledger ready 或 Sequence completed。任何槽位、Result、来源图片、采样资源、路由或价格漂移都会在扣费前拒绝提交；受保护证据不能随素材删除被清理。
+
+Sequence 创建与 `continuity-ledger`、逐镜状态、问题、Reference Lock 和 Artifact revision 在同一事务提交。它只证明 Shot、Prompt、来源图片和状态继承链可追溯，不代表真实视频已经通过视觉连续性审查。全部 Slot 人工接受后 Sequence 进入 `needs_review`；只有现行范围上的人工整组 `PASS/accept` 才能进入 `completed` 并以受管 `directMedia` 引用导入 Canvas 的 `TimelineProject`。重复导入同一 Sequence 会原位替换，最终仍由既有 FFmpeg 导出运行时处理。
+
+## 状态与历史
+
+- `FilmProductionQuote` 状态为 `pending | consumed | expired`；消费后不得换幂等键重复提交。
+- `FilmProductionAttempt` 状态为 `queued | running | succeeded | failed | cancelled | uncertain`。
+- `FilmVisualQCAttempt` 使用同一组状态；同一来源图片同时最多一个活动 Attempt，通用 Task Retry 禁用。
+- `FilmVideoVisualQCAttempt` 使用同一组状态；同一来源视频同时最多一个活动 Attempt，重新检查必须重新采样、报价并确认费用。
+- `FilmVideoSequenceVisualQCAttempt` 使用同一组状态；同一 Sequence 同时最多一个活动或 `uncertain` Attempt，重新检查必须重新采样、报价并确认费用。
+- `FilmVideoSequence` 状态为 `ready | generating | needs_review | completed`；槽位另有 `accepted | failed | cancelled | uncertain` 等细粒度状态。全部槽位 `accepted` 仍是 `needs_review`，人工整组通过后才是 `completed`。
+- 人工 QC 组合固定为 `PASS/accept`、`UNCERTAIN/hold`、`FAIL/retry`。
+- 通用 Task 重试和 Worker 自动备用路由不适用于 Film 图片或视频生产任务；任何付费重试都必须重新报价。
+- Canvas 文档只保存后端事实引用，不承担费用、Attempt、Result 或审批事实的权威存储。
+
+## 部署约束
+
+升级前备份数据库和资源存储，并先在同数据库类型的副本执行启动迁移。新增表是增量变化；回退到不认识这些表的旧版本不会自动删除数据。生产环境还必须使用 HTTPS、受控数据库权限和私有资源存储权限。

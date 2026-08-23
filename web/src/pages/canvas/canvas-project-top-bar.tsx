@@ -40,7 +40,7 @@ type CanvasTopBarProps = {
     mediaPerformanceMode: CanvasMediaPerformanceMode;
     onMediaPerformanceModeChange: (mode: CanvasMediaPerformanceMode) => void;
     onOpenSearch: () => void;
-    projectContext?: CanvasContextSummary & { projectId: string; projectName: string };
+    projectContext?: CanvasContextSummary & { projectId: string; projectName: string; projectType?: string };
     onEnterFocusMode: () => void;
     shortDramaGuide?: { progress: CanvasShortDramaProgress; collapsed: boolean; onToggle: () => void };
 };
@@ -176,7 +176,7 @@ export function CanvasTopBar({
                         )}
                         {projectContext && !isTitleEditing ? (
                             <div className="canvas-topbar-project-context mt-0.5 flex w-full min-w-0 items-center gap-1.5 overflow-hidden text-[var(--fs-tiny)]" style={{ color: theme.node.muted }}>
-                                <Link to={`/projects/${projectContext.projectId}/overview`} className="inline-flex min-w-0 items-center gap-1 hover:underline" title={`返回项目：${projectContext.projectName}`}>
+                                <Link to={`/projects/${projectContext.projectId}/${projectContext.projectType === "ecommerce" ? "ecommerce" : "overview"}`} className="inline-flex min-w-0 items-center gap-1 hover:underline" title={`返回项目：${projectContext.projectName}`}>
                                     <FolderKanban className="size-3 shrink-0" />
                                     <span className="max-w-[120px] truncate">{projectContext.projectName}</span>
                                 </Link>

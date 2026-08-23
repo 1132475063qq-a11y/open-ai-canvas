@@ -90,6 +90,11 @@ export function useCanvasViewportController({
         return focusNodesInView(nodes.filter((node) => selectedNodeIdsRef.current.has(node.id) && !isHiddenBatchChild(node, nodes) && !isNodeHiddenByCollapsedFrame(node, nodes)), 1.25);
     }, [focusNodesInView, nodesRef, selectedNodeIdsRef]);
 
+    const fitCanvasNode = useCallback((nodeId: string) => {
+        const node = nodesRef.current.find((item) => item.id === nodeId);
+        return node ? focusNodesInView([node]) : false;
+    }, [focusNodesInView, nodesRef]);
+
     const handleCanvasDoubleClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
         event.preventDefault();
         if (!fitCanvasSelection()) fitCanvasContent();
@@ -156,6 +161,7 @@ export function useCanvasViewportController({
 
     return {
         fitCanvasContent,
+        fitCanvasNode,
         fitCanvasSelection,
         focusCanvasImageNode,
         focusCanvasNode,

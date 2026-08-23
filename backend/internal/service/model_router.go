@@ -767,11 +767,17 @@ func (s *Service) beginTaskRouteAttempt(task *model.Task) (*model.RouteAttempt, 
 			}
 			return nil, routeDispatchUncertainError{"上一次提交结果不明确，为避免重复扣费已停止自动重发"}
 		case "rejected_no_job":
+			if model.IsFilmManagedTaskType(task.Type) {
+				return nil, errors.New("Film 制作任务的报价路由已冻结，不能自动切换备用路由")
+			}
 			return s.switchTaskToNextRoute(task, attempts)
 		}
 	}
 	routed, routeErr := s.routedModelForTaskSelection(task)
 	if routeErr != nil {
+		if model.IsFilmManagedTaskType(task.Type) {
+			return nil, routeErr
+		}
 		return s.switchTaskToNextRoute(task, attempts)
 	}
 	return s.createRouteAttempt(task, routed, len(attempts)+1)
@@ -851,6 +857,9 @@ func (s *Service) routedModelForTaskSelection(task *model.Task) (*RoutedModel, e
 }
 
 func (s *Service) switchTaskToNextRoute(task *model.Task, attempts []model.RouteAttempt) (*model.RouteAttempt, error) {
+	if task != nil && model.IsFilmManagedTaskType(task.Type) {
+		return nil, errors.New("Film 制作任务的报价路由已冻结，不能自动切换备用路由")
+	}
 	decrypted, err := s.decryptTaskInputJSON(task.InputJSON)
 	if err != nil {
 		return nil, err
@@ -972,6 +981,9 @@ func (s *Service) switchTaskToNextRoute(task *model.Task, attempts []model.Route
 
 func (s *Service) nextRouteAttemptAfterFailure(task *model.Task, attempt *model.RouteAttempt, taskErr error) (*model.RouteAttempt, error) {
 	if task == nil || attempt == nil || attempt.DispatchState != "rejected_no_job" {
+		return nil, nil
+	}
+	if model.IsFilmManagedTaskType(task.Type) {
 		return nil, nil
 	}
 	if errors.Is(taskErr, context.Canceled) || errors.Is(taskErr, context.DeadlineExceeded) {

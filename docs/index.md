@@ -12,9 +12,6 @@
 
 ## 按约定维护的文档（`docs/content/docs/`）
 
-功能、代码地图、待办、待测试分别维护在以下页面（当前缺失，待后续任务重建）：
-
-- 功能：`features.mdx`
-- 代码地图：`code-map.mdx`
-- 待办：`todo.mdx`
-- 待测试：`pending-test.mdx`
+- [待验收](content/docs/pending-test.mdx)：已进入代码但尚未完成最终用户确认的功能与验证边界。
+- [后端数据库](content/docs/backend/backend-database.mdx)：持久化表、Film Runtime 和短剧生产事实合同。
+- 功能、代码地图和待办页面尚待按实际模块重建：`features.mdx`、`code-map.mdx`、`todo.mdx`。

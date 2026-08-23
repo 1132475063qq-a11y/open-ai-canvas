@@ -1,11 +1,24 @@
 import { Fragment, type CSSProperties, type ReactNode } from "react";
 import { Dropdown } from "antd";
-import { AlignLeft, ArrowRight, Bot, Check, ChevronDown, ChevronUp, Clapperboard, FolderKanban, Images, MoreHorizontal, Palette, Pencil, Plus, Sparkles, Type, Upload, X } from "lucide-react";
+import { AlignLeft, ArrowRight, Bot, Check, ChevronDown, ChevronUp, Clapperboard, FolderKanban, Images, MoreHorizontal, Palette, Pencil, Plus, ShoppingBag, Sparkles, Type, Upload, Workflow, X } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import type { CanvasShortDramaProgress, CanvasShortDramaStepId } from "@/lib/canvas/canvas-short-drama";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasNodeData } from "@/types/canvas";
+
+export function CanvasEcommerceEmptyState({ projectName, onCreatePipeline }: { projectName: string; onCreatePipeline: () => void }) {
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    return (
+        <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center px-4 pb-16 pt-20">
+            <div className="pointer-events-auto w-full max-w-[440px] rounded-lg border p-4 shadow-sm backdrop-blur" data-canvas-no-zoom style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}>
+                <div className="flex items-center gap-2.5"><span className="grid size-9 shrink-0 place-items-center rounded-md" style={{ background: theme.toolbar.itemHover, color: theme.node.muted }}><ShoppingBag className="size-4" /></span><div className="min-w-0"><h2 className="truncate text-sm font-semibold">{projectName}</h2><p className="mt-0.5 text-[var(--fs-label)]" style={{ color: theme.node.muted }}>从商品事实到结果质检的独立电商生产链</p></div></div>
+                <button type="button" onClick={onCreatePipeline} className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border text-sm font-medium" style={{ borderColor: theme.node.stroke, background: theme.node.fill }}><Workflow className="size-4" />恢复系列生产 Frame</button>
+                <p className="mt-2 text-[var(--fs-tiny)] leading-5" style={{ color: theme.node.muted }}>从后端恢复资产、计划、任务、结果与 QA 引用，不会自动提交付费任务。</p>
+            </div>
+        </div>
+    );
+}
 
 export function CanvasLinkedProjectEmptyState({ projectName, hasChapter, onAddFirstChapter, onOpenAssets, onAddText }: { projectName: string; hasChapter: boolean; onAddFirstChapter: () => void; onOpenAssets: () => void; onAddText: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
