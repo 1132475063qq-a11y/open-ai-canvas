@@ -10,11 +10,57 @@ import (
 	"infinite-canvas/backend/internal/repository"
 )
 
+func TestFilmHandoffDoesNotCreateAChildRunWhenTheTextModelBecomesUnavailable(t *testing.T) {
+	svc, repo, db, project := newFilmAgentRuntimeTestService(t)
+	svc.filmAgentExecutor = &recordingFilmAgentExecutor{}
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-handoff-model-loss", CreateFilmAgentRunRequest{
+		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
+	})
+	if err != nil {
+		t.Fatalf("create Film Handoff model-loss fixture: %v", err)
+	}
+	if processed, err := svc.ProcessNextFilmAgentStep(); !processed || err != nil {
+		t.Fatalf("execute Film Handoff model-loss root = %v, %v", processed, err)
+	}
+	detail, err := repo.AgentRuntimeDetailForUser(project.UserID, created.Detail.Run.ID)
+	if err != nil {
+		t.Fatalf("load Film Handoff model-loss root: %v", err)
+	}
+	artifact, review := findCurrentFilmArtifact(t, detail, "script")
+	locked, err := svc.LockFilmAgentArtifact(project.UserID, project.ID, detail.Run.ID, artifact.ID, LockFilmAgentArtifactRequest{
+		ExpectedRunRevision: detail.Run.Revision, ExpectedArtifactSequence: artifact.RevisionSequence, ExpectedRevisionID: review.ID,
+	})
+	if err != nil {
+		t.Fatalf("lock Film Handoff model-loss script: %v", err)
+	}
+	if err := db.Model(&model.LogicalModelRoute{}).Where("id = ?", filmAgentTestRouteID).Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable Film text route before Handoff: %v", err)
+	}
+	svc.invalidateRouteCatalog()
+	if processed, err := svc.ProcessNextFilmAgentHandoff(); !processed || err == nil {
+		t.Fatalf("Handoff with unavailable text model = %v, %v", processed, err)
+	}
+	runs, err := repo.ProjectAgentRuntimeRunsForDomain(project.UserID, project.ID, "film", 10)
+	if err != nil {
+		t.Fatalf("list Film Runs after rejected Handoff: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != created.Detail.Run.ID {
+		t.Fatalf("unavailable text model created a child Run: %#v", runs)
+	}
+	trigger, err := repo.AgentHandoffTrigger(locked.Trigger.ID)
+	if err != nil {
+		t.Fatalf("load rejected Film Handoff Trigger: %v", err)
+	}
+	if trigger.Status != model.AgentHandoffTriggerStatusPending || trigger.FailureCode != "film_handoff_processing_failed" || trigger.NextAttemptAt == nil {
+		t.Fatalf("rejected Film Handoff did not preserve retry evidence: %#v", trigger)
+	}
+}
+
 func TestLockedFilmArtifactsDriveDurableHandoffRunsWithoutDuplicateRoutes(t *testing.T) {
 	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
 	executor := &recordingFilmAgentExecutor{}
 	svc.filmAgentExecutor = executor
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-handoff-root", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-handoff-root", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01", Input: map[string]any{"premise": "一场被遗忘的毕业演出"},
 	})
 	if err != nil {

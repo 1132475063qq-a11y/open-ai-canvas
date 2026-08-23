@@ -55,9 +55,11 @@ The existing Film acceptance project is:
 - Problem: the Run predates logical text-model publication and has no pinned
   `logicalModelId`; approving it would fail in the backend Agent Worker.
 
-The current UI change blocks approval of that unbound Run, allows cancellation,
-and blocks creation of a replacement until an available logical text model is
-selected.
+The UI and backend now both block approval of that unbound Run, allow
+cancellation, and block creation of a replacement until an available logical
+text model is selected. Approval and failed-Step retry also re-resolve the
+pinned text-model route so an archived model or disabled route cannot resume
+execution.
 
 ## Latest Engineering Slice
 
@@ -68,9 +70,16 @@ selected.
 - A 4K target never silently escalates to an available 8K size.
 - Model selection and legacy Run-envelope behavior have focused tests, and the
   test is included in the web test command.
+- The Film Agent API now requires an available logical text model when creating
+  a Run. Human approval and failed-Step retry recheck availability; an unbound
+  legacy Run remains readable and cancellable. Automatic Handoff scheduling
+  also rechecks the inherited model before creating a child Run.
+- Service and HTTP fixtures now use a complete synthetic `LogicalModel ->
+Revision -> Route -> ChannelModel -> SystemChannel` text path. Focused tests
+  cover missing, unknown, archived, disabled, restored, and legacy model states.
 - The web type check, focused Node smoke, Prettier check, and production build
-  pass. Bun was unavailable in the current shell, so the new Bun test is
-  committed but was not executed here.
+  pass. Bun and Go 1.25 were unavailable in the current shell, so the Bun suite
+  and newly changed backend suites were not executed here.
 - The current sandbox denied opening a second localhost port, so the new UI
   build did not receive a fresh Playwright screenshot. The existing app did
   prove the backend logical-model publication and discovery path.
@@ -104,6 +113,7 @@ bun test test/film-production-model.test.ts test/film-workspace-isolation.test.t
 
 cd ../backend
 go test ./internal/service -run 'TestFilmProduction|TestFilmVisualQC|TestFilmVideo|TestFilmMultiShot' -count=1
+go test ./internal/service -run 'TestFilmAgent|TestCreateFilmAgent|TestArchivedFilm|TestRetryFilmAgent|TestProcessNextFilmAgent|TestLockedFilmArtifacts' -count=1
 go test ./internal/repository ./internal/handler ./internal/database ./internal/agentruntime -count=1
 ```
 

@@ -15,6 +15,11 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	filmAgentTestLogicalModelID = "logical-film-agent-test"
+	filmAgentTestRouteID        = "logical-route-film-agent-test"
+)
+
 func TestFilmAgentRegistryCompilesAllIntentRoutesIntoExecutableSteps(t *testing.T) {
 	svc, _, _, _ := newFilmAgentRuntimeTestService(t)
 	if len(svc.filmAgentRegistry.IntentRoutes) != 15 {
@@ -133,7 +138,7 @@ func TestFilmAgentEveryIntentRouteExecutesThroughDurableRuntime(t *testing.T) {
 
 			executor := &recordingFilmAgentExecutor{}
 			svc.filmAgentExecutor = executor
-			created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-route-exec-"+route.ID, CreateFilmAgentRunRequest{
+			created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-route-exec-"+route.ID, CreateFilmAgentRunRequest{
 				Objective: "执行 " + route.Name, IntentRouteID: route.ID, AgentID: route.PrimaryAgentID,
 				Input: map[string]any{"fixture": route.ID}, InputArtifactRevisionIDs: inputRevisionIDs,
 			})
@@ -184,7 +189,7 @@ func TestCreateFilmAgentRunPersistsLockedInputAndIsIdempotent(t *testing.T) {
 		IntentRouteID: "IR-01",
 		Input:         map[string]any{"premise": "一位快递员发现时间停滞"},
 	}
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-create-0001", request)
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-create-0001", request)
 	if err != nil {
 		t.Fatalf("CreateFilmAgentRun(): %v", err)
 	}
@@ -223,7 +228,7 @@ func TestCreateFilmAgentRunPersistsLockedInputAndIsIdempotent(t *testing.T) {
 		t.Fatalf("persisted Run input lacks request identity: %#v", persistedInput)
 	}
 
-	replayed, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-create-0001", request)
+	replayed, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-create-0001", request)
 	if err != nil {
 		t.Fatalf("idempotent replay: %v", err)
 	}
@@ -231,7 +236,7 @@ func TestCreateFilmAgentRunPersistsLockedInputAndIsIdempotent(t *testing.T) {
 	if !replayed.Idempotent || replayed.Detail.Run.ID != created.Detail.Run.ID || replayedRequirements.ID != artifact.ID {
 		t.Fatalf("idempotent replay created different facts: %#v", replayed)
 	}
-	if _, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-create-0001", CreateFilmAgentRunRequest{
+	if _, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-create-0001", CreateFilmAgentRunRequest{
 		Objective: "写另一个原创短片故事", IntentRouteID: "IR-01",
 	}); authStatus(err) != 409 {
 		t.Fatalf("changed request with reused idempotency key error = %v, want 409", err)
@@ -242,9 +247,32 @@ func TestCreateFilmAgentRunPersistsLockedInputAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCreateFilmAgentRunRequiresAnAvailableTextModel(t *testing.T) {
+	svc, _, db, project := newFilmAgentRuntimeTestService(t)
+	request := CreateFilmAgentRunRequest{Objective: "写一个原创短片故事", IntentRouteID: "IR-01"}
+
+	if _, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-model-missing", request); authStatus(err) != 400 {
+		t.Fatalf("missing Film text model error = %v, want 400", err)
+	}
+	request.LogicalModelID = "logical-model-does-not-exist"
+	if _, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-model-unknown", request); authStatus(err) != 400 {
+		t.Fatalf("unknown Film text model error = %v, want 400", err)
+	}
+
+	archivedAt := time.Now().UTC()
+	if err := db.Model(&model.LogicalModel{}).Where("id = ?", filmAgentTestLogicalModelID).Update("archived_at", archivedAt).Error; err != nil {
+		t.Fatalf("archive Film text model fixture: %v", err)
+	}
+	svc.invalidateRouteCatalog()
+	request.LogicalModelID = filmAgentTestLogicalModelID
+	if _, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-model-archived", request); authStatus(err) != 400 {
+		t.Fatalf("archived Film text model error = %v, want 400", err)
+	}
+}
+
 func TestFilmAgentRunReviewPauseResumeAndStaleReplay(t *testing.T) {
-	svc, _, _, project := newFilmAgentRuntimeTestService(t)
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-review-0001", CreateFilmAgentRunRequest{
+	svc, _, db, project := newFilmAgentRuntimeTestService(t)
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-review-0001", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01", ReviewBeforeExecution: true,
 	})
 	if err != nil {
@@ -255,6 +283,20 @@ func TestFilmAgentRunReviewPauseResumeAndStaleReplay(t *testing.T) {
 		t.Fatalf("review Run did not pause coherently: %#v", created.Detail)
 	}
 	decision := created.Detail.HumanDecisions[0]
+	if err := db.Model(&model.LogicalModelRoute{}).Where("id = ?", filmAgentTestRouteID).Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable Film text route before approval: %v", err)
+	}
+	svc.invalidateRouteCatalog()
+	if _, err := svc.ResolveFilmAgentDecision(project.UserID, project.ID, created.Detail.Run.ID, decision.ID, ResolveFilmAgentDecisionRequest{
+		ExpectedRunRevision: created.Detail.Run.Revision, ExpectedStepRevision: created.Detail.Steps[0].Revision,
+		ExpectedDecisionRevision: decision.Revision, Action: "approve",
+	}); authStatus(err) != 409 {
+		t.Fatalf("approve with unavailable Film text route error = %v, want 409", err)
+	}
+	if err := db.Model(&model.LogicalModelRoute{}).Where("id = ?", filmAgentTestRouteID).Update("enabled", true).Error; err != nil {
+		t.Fatalf("restore Film text route before approval: %v", err)
+	}
+	svc.invalidateRouteCatalog()
 	resolved, err := svc.ResolveFilmAgentDecision(project.UserID, project.ID, created.Detail.Run.ID, decision.ID, ResolveFilmAgentDecisionRequest{
 		ExpectedRunRevision: created.Detail.Run.Revision, ExpectedStepRevision: created.Detail.Steps[0].Revision,
 		ExpectedDecisionRevision: decision.Revision, Action: "approve", Response: map[string]any{"note": "方案通过"},
@@ -274,16 +316,54 @@ func TestFilmAgentRunReviewPauseResumeAndStaleReplay(t *testing.T) {
 	}
 }
 
+func TestLegacyFilmAgentRunWithoutModelCanStillBeCancelled(t *testing.T) {
+	svc, _, db, project := newFilmAgentRuntimeTestService(t)
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-review-legacy-model", CreateFilmAgentRunRequest{
+		Objective: "写一个原创短片故事", IntentRouteID: "IR-01", ReviewBeforeExecution: true,
+	})
+	if err != nil {
+		t.Fatalf("create legacy Film Run fixture: %v", err)
+	}
+	var runInput map[string]any
+	if err := json.Unmarshal([]byte(created.Detail.Run.InputJSON), &runInput); err != nil {
+		t.Fatalf("decode legacy Film Run fixture: %v", err)
+	}
+	delete(runInput, "logicalModelId")
+	legacyInput, err := json.Marshal(runInput)
+	if err != nil {
+		t.Fatalf("encode legacy Film Run fixture: %v", err)
+	}
+	if err := db.Model(&model.AgentRuntimeRun{}).Where("id = ?", created.Detail.Run.ID).Update("input_json", string(legacyInput)).Error; err != nil {
+		t.Fatalf("remove legacy Film Run model: %v", err)
+	}
+	decision := created.Detail.HumanDecisions[0]
+	request := ResolveFilmAgentDecisionRequest{
+		ExpectedRunRevision: created.Detail.Run.Revision, ExpectedStepRevision: created.Detail.Steps[0].Revision,
+		ExpectedDecisionRevision: decision.Revision, Action: "approve",
+	}
+	if _, err := svc.ResolveFilmAgentDecision(project.UserID, project.ID, created.Detail.Run.ID, decision.ID, request); authStatus(err) != 409 {
+		t.Fatalf("approve legacy Film Run without model error = %v, want 409", err)
+	}
+	request.Action = "cancel"
+	cancelled, err := svc.ResolveFilmAgentDecision(project.UserID, project.ID, created.Detail.Run.ID, decision.ID, request)
+	if err != nil {
+		t.Fatalf("cancel legacy Film Run without model: %v", err)
+	}
+	if cancelled.Run.Status != model.AgentRunStatusCancelled || cancelled.Steps[0].Status != model.AgentStepStatusCancelled {
+		t.Fatalf("legacy Film Run was not cancelled coherently: %#v", cancelled)
+	}
+}
+
 func TestFilmAgentRunRequiresLockedRouteInputs(t *testing.T) {
 	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
 	draft := createFilmTestArtifactRevision(t, repo, project, "script-draft", model.ProductionArtifactStatusDraft)
-	if _, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-script-draft", CreateFilmAgentRunRequest{
+	if _, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-script-draft", CreateFilmAgentRunRequest{
 		Objective: "把剧本做成分镜", IntentRouteID: "IR-07", InputArtifactRevisionIDs: []string{draft.ID},
 	}); authStatus(err) != 409 {
 		t.Fatalf("draft required input error = %v, want 409", err)
 	}
 	locked := createFilmTestArtifactRevision(t, repo, project, "script-locked", model.ProductionArtifactStatusLocked)
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-script-locked", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-script-locked", CreateFilmAgentRunRequest{
 		Objective: "把剧本做成分镜", IntentRouteID: "IR-07", InputArtifactRevisionIDs: []string{locked.ID},
 	})
 	if err != nil {
@@ -303,7 +383,7 @@ func TestFilmAgentRunRequiresLockedRouteInputs(t *testing.T) {
 
 func TestFilmAgentRunRejectsSecretsAndKeepsDomainIsolation(t *testing.T) {
 	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
-	if _, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-secret-0001", CreateFilmAgentRunRequest{
+	if _, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-secret-0001", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
 		Input: map[string]any{"config": map[string]any{"api_key": "must-not-persist"}},
 	}); authStatus(err) != 400 {
@@ -317,12 +397,12 @@ func TestFilmAgentRunRejectsSecretsAndKeepsDomainIsolation(t *testing.T) {
 	if err := repo.CreateProject(&ecommerceProject); err != nil {
 		t.Fatalf("create Ecommerce project: %v", err)
 	}
-	if _, err := svc.CreateFilmAgentRun(project.UserID, ecommerceProject.ID, "film-domain-0001", CreateFilmAgentRunRequest{
+	if _, err := createFilmAgentRunWithTestModel(svc, project.UserID, ecommerceProject.ID, "film-domain-0001", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
 	}); authStatus(err) != 404 {
 		t.Fatalf("Film Run in Ecommerce project error = %v, want 404", err)
 	}
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-domain-0002", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-domain-0002", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {
@@ -351,7 +431,7 @@ func TestFilmAgentRunRejectsSecretsAndKeepsDomainIsolation(t *testing.T) {
 
 func TestArchivedFilmProjectKeepsHistoryReadableButRejectsWrites(t *testing.T) {
 	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-archive-0001", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-archive-0001", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01", ReviewBeforeExecution: true,
 	})
 	if err != nil {
@@ -372,7 +452,7 @@ func TestArchivedFilmProjectKeepsHistoryReadableButRejectsWrites(t *testing.T) {
 	if _, err := svc.FilmAgentRuntimeCatalog(project.UserID, project.ID); err != nil {
 		t.Fatalf("archived Film catalog must stay readable: %v", err)
 	}
-	if _, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-archive-0002", CreateFilmAgentRunRequest{
+	if _, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-archive-0002", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
 	}); authStatus(err) != 409 {
 		t.Fatalf("create in archived project error = %v, want 409", err)
@@ -387,8 +467,8 @@ func TestArchivedFilmProjectKeepsHistoryReadableButRejectsWrites(t *testing.T) {
 }
 
 func TestRetryFilmAgentStepCreatesANewAttempt(t *testing.T) {
-	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-retry-0001", CreateFilmAgentRunRequest{
+	svc, repo, db, project := newFilmAgentRuntimeTestService(t)
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-retry-0001", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {
@@ -428,6 +508,19 @@ func TestRetryFilmAgentStepCreatesANewAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fail first Attempt: %v", err)
 	}
+	if err := db.Model(&model.LogicalModelRoute{}).Where("id = ?", filmAgentTestRouteID).Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable Film text route before retry: %v", err)
+	}
+	svc.invalidateRouteCatalog()
+	if _, err := svc.RetryFilmAgentStep(project.UserID, project.ID, runPtr.ID, stepPtr.ID, RetryFilmAgentStepRequest{
+		ExpectedRunRevision: runPtr.Revision, ExpectedStepRevision: stepPtr.Revision, Reason: "模型线路失效时不应重试",
+	}); authStatus(err) != 409 {
+		t.Fatalf("retry with unavailable Film text route error = %v, want 409", err)
+	}
+	if err := db.Model(&model.LogicalModelRoute{}).Where("id = ?", filmAgentTestRouteID).Update("enabled", true).Error; err != nil {
+		t.Fatalf("restore Film text route before retry: %v", err)
+	}
+	svc.invalidateRouteCatalog()
 	retried, err := svc.RetryFilmAgentStep(project.UserID, project.ID, runPtr.ID, stepPtr.ID, RetryFilmAgentStepRequest{
 		ExpectedRunRevision: runPtr.Revision, ExpectedStepRevision: stepPtr.Revision, Reason: "修正执行上下文后重试",
 	})
@@ -452,6 +545,8 @@ func newFilmAgentRuntimeTestService(t *testing.T) (*Service, *repository.Reposit
 	}
 	if err := db.AutoMigrate(
 		&model.Project{}, &model.CanvasProject{},
+		&model.ModelChannel{}, &model.ChannelModel{},
+		&model.LogicalModel{}, &model.LogicalModelRevision{}, &model.LogicalModelRoute{},
 		&model.AgentRuntimeRun{}, &model.AgentRuntimeStep{}, &model.AgentRuntimeAttempt{},
 		&model.AgentRoutingDecision{}, &model.AgentHumanDecision{}, &model.AgentRuntimeEvent{},
 		&model.AgentHandoffTrigger{},
@@ -459,12 +554,13 @@ func newFilmAgentRuntimeTestService(t *testing.T) (*Service, *repository.Reposit
 	); err != nil {
 		t.Fatalf("migrate Film Agent Runtime database: %v", err)
 	}
+	now := time.Now().UTC()
+	seedFilmAgentTestTextModel(t, db, now)
 	repo := repository.New(db)
 	svc := New(repo, t.TempDir())
 	if err := svc.ValidateRuntime(); err != nil {
 		t.Fatalf("ValidateRuntime(): %v", err)
 	}
-	now := time.Now().UTC()
 	project := model.Project{
 		ID: "project-film", UserID: "user-film", Name: "Film Project", Type: "short-drama", AspectRatio: "9:16",
 		SourceType: "blank", Status: model.ProjectStatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
@@ -473,6 +569,57 @@ func newFilmAgentRuntimeTestService(t *testing.T) (*Service, *repository.Reposit
 		t.Fatalf("create Film project: %v", err)
 	}
 	return svc, repo, db, project
+}
+
+func seedFilmAgentTestTextModel(t *testing.T, db *gorm.DB, now time.Time) {
+	t.Helper()
+	capabilityConfig := &ModelCapabilityConfig{Version: 1, Text: &TextCapabilityConfig{References: TextReferenceConfig{PromptMaxChars: 2_000_000}}}
+	capabilityConfigJSON, err := json.Marshal(capabilityConfig)
+	if err != nil {
+		t.Fatalf("encode Film Agent test channel capability: %v", err)
+	}
+	capabilitySpec, err := CapabilitySpecFromModelCapabilityConfig(capabilityConfig, "text")
+	if err != nil {
+		t.Fatalf("project Film Agent test logical capability: %v", err)
+	}
+	capabilitySpecJSON, err := json.Marshal(capabilitySpec)
+	if err != nil {
+		t.Fatalf("encode Film Agent test logical capability: %v", err)
+	}
+	channel := model.ModelChannel{
+		ID: "channel-film-agent-test", UserID: "admin", Scope: model.ChannelScopeSystem, Enabled: true,
+		Name: "Film Agent Test Provider", BaseURL: "https://film-agent.test.invalid", APIFormat: "openai",
+		ConcurrencyLimit: 2, ModelsJSON: `["film-agent-test-text"]`, CreatedAt: now, UpdatedAt: now,
+	}
+	channelModel := model.ChannelModel{
+		ID: "channel-model-film-agent-test", ChannelID: channel.ID, ModelKey: "film-agent-test-text", DisplayName: "Film Agent Test Text",
+		Capability: "text", Protocol: model.ChannelInterfaceChatCompletion, BillingMode: "fixed_request",
+		UnitPriceMicrocredits: 1, PriceConfigured: true, Enabled: true, PriceVersion: 1,
+		CapabilityConfigJSON: string(capabilityConfigJSON), CapabilityVersion: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	revision := model.LogicalModelRevision{
+		ID: "logical-revision-film-agent-test", LogicalModelID: filmAgentTestLogicalModelID, Version: 1,
+		CapabilitySpecJSON: string(capabilitySpecJSON), DefaultOptionsJSON: `{}`, CreatedBy: "test", CreatedAt: now,
+	}
+	logicalModel := model.LogicalModel{
+		ID: filmAgentTestLogicalModelID, Code: "film-agent-test-text", Name: "Film Agent Test Text", Capability: "text", Enabled: true,
+		RevisionSequence: 1, ActiveRevisionID: revision.ID, PricePolicy: "unified", BillingMode: "fixed_request",
+		UnitPriceMicrocredits: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	route := model.LogicalModelRoute{
+		ID: filmAgentTestRouteID, LogicalModelRevisionID: revision.ID, ChannelModelID: channelModel.ID,
+		Enabled: true, Priority: 100, Weight: 100, CreatedAt: now, UpdatedAt: now,
+	}
+	for _, item := range []any{&channel, &channelModel, &logicalModel, &revision, &route} {
+		if err := db.Create(item).Error; err != nil {
+			t.Fatalf("create Film Agent text model fixture %T: %v", item, err)
+		}
+	}
+}
+
+func createFilmAgentRunWithTestModel(svc *Service, userID string, projectID string, idempotencyKey string, request CreateFilmAgentRunRequest) (FilmAgentRunCreateResult, error) {
+	request.LogicalModelID = filmAgentTestLogicalModelID
+	return svc.CreateFilmAgentRun(userID, projectID, idempotencyKey, request)
 }
 
 func createFilmTestArtifactRevisionOfType(t *testing.T, repo *repository.Repository, project model.Project, logicalKey string, artifactType string) model.ProductionArtifactRevision {

@@ -102,10 +102,11 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 		return FilmAgentRunCreateResult{}, err
 	}
 	logicalModelID := strings.TrimSpace(request.LogicalModelID)
-	if logicalModelID != "" {
-		if _, err := s.ResolveLogicalModel(logicalModelID, ModelRequestIntent{Capability: "text", Inputs: map[string]int{}, Options: map[string]any{}}); err != nil {
-			return FilmAgentRunCreateResult{}, err
-		}
+	if logicalModelID == "" {
+		return FilmAgentRunCreateResult{}, BadAuthRequest("请选择可用的逻辑文本模型")
+	}
+	if _, err := s.ResolveLogicalModel(logicalModelID, filmAgentTextModelIntent()); err != nil {
+		return FilmAgentRunCreateResult{}, err
 	}
 	route, selectedAgentID, routeReason, routeConfidence, err := s.selectFilmIntentRoute(objective, request.IntentRouteID, request.AgentID)
 	if err != nil {
@@ -344,6 +345,11 @@ func (s *Service) ResolveFilmAgentDecision(userID string, projectID string, runI
 	if action != "approve" && action != "cancel" {
 		return repository.AgentRuntimeDetail{}, BadAuthRequest("人工作业决定仅支持 approve 或 cancel")
 	}
+	if action == "approve" {
+		if err := s.requireAvailableFilmAgentRunTextModel(detail.Run); err != nil {
+			return repository.AgentRuntimeDetail{}, err
+		}
+	}
 	response := request.Response
 	if response == nil {
 		response = map[string]any{}
@@ -387,6 +393,9 @@ func (s *Service) RetryFilmAgentStep(userID string, projectID string, runID stri
 	}
 	if step.Status != model.AgentStepStatusFailed {
 		return repository.AgentRuntimeDetail{}, conflictError("只有失败的 Film Agent Step 才能重试")
+	}
+	if err := s.requireAvailableFilmAgentRunTextModel(detail.Run); err != nil {
+		return repository.AgentRuntimeDetail{}, err
 	}
 	reason := strings.TrimSpace(request.Reason)
 	if len([]rune(reason)) > 1000 {
@@ -432,6 +441,25 @@ func (s *Service) requireMutableFilmProject(userID string, projectID string) (*m
 		return nil, conflictError("项目已归档，不能创建或修改 Film Agent Run")
 	}
 	return project, nil
+}
+
+func filmAgentTextModelIntent() ModelRequestIntent {
+	return ModelRequestIntent{Capability: "text", Inputs: map[string]int{}, Options: map[string]any{}}
+}
+
+func (s *Service) requireAvailableFilmAgentRunTextModel(run model.AgentRuntimeRun) error {
+	logicalModelID, err := filmAgentRunLogicalModelID(run)
+	if err != nil || logicalModelID == "" {
+		return conflictError("该 Film Agent Run 未绑定有效的逻辑文本模型，只能取消后重新创建")
+	}
+	if _, err := s.ResolveLogicalModel(logicalModelID, filmAgentTextModelIntent()); err != nil {
+		var authErr *AuthError
+		if errors.As(err, &authErr) && authErr.Status == 400 {
+			return conflictError("该 Film Agent Run 绑定的逻辑文本模型已不可用，请取消后选择可用模型重新创建")
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Service) validateFilmCanvas(userID string, projectID string, canvasID string) error {

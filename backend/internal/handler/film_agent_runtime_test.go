@@ -22,6 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const handlerFilmAgentLogicalModelID = "logical-film-agent-handler"
+
 func TestFilmAgentRuntimeHTTPContract(t *testing.T) {
 	router, cookie, project, repo, db := newFilmAgentRuntimeTestRouter(t)
 
@@ -52,8 +54,13 @@ func TestFilmAgentRuntimeHTTPContract(t *testing.T) {
 	if missingKey.Code != http.StatusBadRequest {
 		t.Fatalf("missing idempotency status = %d, body = %s", missingKey.Code, missingKey.Body.String())
 	}
+	missingModel := filmAgentRuntimeRequest(t, router, http.MethodPost, "/api/projects/"+project.ID+"/film/agent-runs", `{"objective":"写一个原创短片故事","intentRouteId":"IR-01"}`, cookie, "film-http-missing-model")
+	if missingModel.Code != http.StatusBadRequest {
+		t.Fatalf("missing logical text model status = %d, body = %s", missingModel.Code, missingModel.Body.String())
+	}
 
-	createResponse := filmAgentRuntimeRequest(t, router, http.MethodPost, "/api/projects/"+project.ID+"/film/agent-runs", `{"objective":"写一个原创短片故事","intentRouteId":"IR-01","reviewBeforeExecution":true}`, cookie, "film-http-create-0001")
+	createBody := fmt.Sprintf(`{"objective":"写一个原创短片故事","intentRouteId":"IR-01","logicalModelId":%q,"reviewBeforeExecution":true}`, handlerFilmAgentLogicalModelID)
+	createResponse := filmAgentRuntimeRequest(t, router, http.MethodPost, "/api/projects/"+project.ID+"/film/agent-runs", createBody, cookie, "film-http-create-0001")
 	if createResponse.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", createResponse.Code, createResponse.Body.String())
 	}
@@ -67,7 +74,7 @@ func TestFilmAgentRuntimeHTTPContract(t *testing.T) {
 		t.Fatalf("created HTTP Run is incomplete: %#v", created)
 	}
 
-	replayResponse := filmAgentRuntimeRequest(t, router, http.MethodPost, "/api/projects/"+project.ID+"/film/agent-runs", `{"objective":"写一个原创短片故事","intentRouteId":"IR-01","reviewBeforeExecution":true}`, cookie, "film-http-create-0001")
+	replayResponse := filmAgentRuntimeRequest(t, router, http.MethodPost, "/api/projects/"+project.ID+"/film/agent-runs", createBody, cookie, "film-http-create-0001")
 	if replayResponse.Code != http.StatusOK {
 		t.Fatalf("idempotent replay status = %d, body = %s", replayResponse.Code, replayResponse.Body.String())
 	}
@@ -329,6 +336,8 @@ func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Pro
 	}
 	if err := db.AutoMigrate(
 		&model.User{}, &model.AuthSession{}, &model.Project{}, &model.CanvasProject{},
+		&model.ModelChannel{}, &model.ChannelModel{},
+		&model.LogicalModel{}, &model.LogicalModelRevision{}, &model.LogicalModelRoute{},
 		&model.AgentRuntimeRun{}, &model.AgentRuntimeStep{}, &model.AgentRuntimeAttempt{},
 		&model.AgentRoutingDecision{}, &model.AgentHumanDecision{}, &model.AgentRuntimeEvent{},
 		&model.AgentHandoffTrigger{},
@@ -343,12 +352,13 @@ func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Pro
 	); err != nil {
 		t.Fatalf("migrate handler database: %v", err)
 	}
+	now := time.Now().UTC()
+	seedFilmAgentHandlerTextModel(t, db, now)
 	repo := repository.New(db)
 	svc := service.New(repo, t.TempDir())
 	if err := svc.ValidateRuntime(); err != nil {
 		t.Fatalf("ValidateRuntime(): %v", err)
 	}
-	now := time.Now().UTC()
 	user := model.User{
 		ID: "handler-user", Username: "film-handler", DisplayName: "Film Handler",
 		Role: model.UserRoleUser, Status: model.UserStatusActive, CreatedAt: now, UpdatedAt: now,
@@ -377,6 +387,52 @@ func newFilmAgentRuntimeTestRouter(t *testing.T) (*gin.Engine, string, model.Pro
 	RegisterFilmAgentRuntimeRoutes(api, svc)
 	RegisterFilmProductionRoutes(api, svc)
 	return router, service.SessionCookieName + "=" + session.ID + "." + token, project, repo, db
+}
+
+func seedFilmAgentHandlerTextModel(t *testing.T, db *gorm.DB, now time.Time) {
+	t.Helper()
+	capabilityConfig := &service.ModelCapabilityConfig{Version: 1, Text: &service.TextCapabilityConfig{References: service.TextReferenceConfig{PromptMaxChars: 2_000_000}}}
+	capabilityConfigJSON, err := json.Marshal(capabilityConfig)
+	if err != nil {
+		t.Fatalf("encode handler Film text capability: %v", err)
+	}
+	capabilitySpec, err := service.CapabilitySpecFromModelCapabilityConfig(capabilityConfig, "text")
+	if err != nil {
+		t.Fatalf("project handler Film text capability: %v", err)
+	}
+	capabilitySpecJSON, err := json.Marshal(capabilitySpec)
+	if err != nil {
+		t.Fatalf("encode handler Film logical capability: %v", err)
+	}
+	channel := model.ModelChannel{
+		ID: "channel-film-agent-handler", UserID: "admin", Scope: model.ChannelScopeSystem, Enabled: true,
+		Name: "Film Handler Test Provider", BaseURL: "https://film-handler.test.invalid", APIFormat: "openai",
+		ConcurrencyLimit: 2, ModelsJSON: `["film-handler-text"]`, CreatedAt: now, UpdatedAt: now,
+	}
+	channelModel := model.ChannelModel{
+		ID: "channel-model-film-agent-handler", ChannelID: channel.ID, ModelKey: "film-handler-text", DisplayName: "Film Handler Text",
+		Capability: "text", Protocol: model.ChannelInterfaceChatCompletion, BillingMode: "fixed_request",
+		UnitPriceMicrocredits: 1, PriceConfigured: true, Enabled: true, PriceVersion: 1,
+		CapabilityConfigJSON: string(capabilityConfigJSON), CapabilityVersion: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	revision := model.LogicalModelRevision{
+		ID: "logical-revision-film-agent-handler", LogicalModelID: handlerFilmAgentLogicalModelID, Version: 1,
+		CapabilitySpecJSON: string(capabilitySpecJSON), DefaultOptionsJSON: `{}`, CreatedBy: "test", CreatedAt: now,
+	}
+	logicalModel := model.LogicalModel{
+		ID: handlerFilmAgentLogicalModelID, Code: "film-agent-handler-text", Name: "Film Handler Text", Capability: "text", Enabled: true,
+		RevisionSequence: 1, ActiveRevisionID: revision.ID, PricePolicy: "unified", BillingMode: "fixed_request",
+		UnitPriceMicrocredits: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	route := model.LogicalModelRoute{
+		ID: "logical-route-film-agent-handler", LogicalModelRevisionID: revision.ID, ChannelModelID: channelModel.ID,
+		Enabled: true, Priority: 100, Weight: 100, CreatedAt: now, UpdatedAt: now,
+	}
+	for _, item := range []any{&channel, &channelModel, &logicalModel, &revision, &route} {
+		if err := db.Create(item).Error; err != nil {
+			t.Fatalf("create handler Film text model fixture %T: %v", item, err)
+		}
+	}
 }
 
 func createFilmAgentHandlerLockFixture(t *testing.T, repo *repository.Repository, db *gorm.DB, detail repository.AgentRuntimeDetail) (model.ProductionArtifact, model.ProductionArtifactRevision) {

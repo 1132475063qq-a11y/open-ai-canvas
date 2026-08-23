@@ -24,12 +24,16 @@ and persisted runtime evidence.
 - Human gates pause and resume from an explicit decision record.
 - Provider credentials never enter prompts, logs, artifacts, or canvas data.
 
-Current status: **passed for the Film shared runtime**. Durable
+Current status: **implemented; latest Film model-gate rerun pending**. Durable
 Run/Step/Attempt/Event state, optimistic revision fencing, immutable Artifact
 revisions, idempotent creation, human pause/resume, restart restoration, secret
 rejection, provider-neutral execution, lease recovery, strict structured output
 validation, atomic completion, and evidence-fenced project closeout are
-implemented and tested.
+implemented. Run creation now requires an available logical text model, while
+approval and failed-Step retry recheck the pinned route; legacy unbound Runs
+remain cancellable. Regression cases are present for missing, archived,
+disabled, restored, and legacy model states, but the latest backend slice still
+requires a Go 1.25 rerun in an environment that provides the toolchain.
 
 ## Gate 2: Complete AgentTeam Registration
 

@@ -34,7 +34,7 @@ func TestProcessNextFilmAgentStepPersistsValidatedReviewArtifact(t *testing.T) {
 	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
 	executor := &recordingFilmAgentExecutor{}
 	svc.filmAgentExecutor = executor
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-executor-single", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-executor-single", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01", Input: map[string]any{"premise": "停电后的最后一班地铁"},
 	})
 	if err != nil {
@@ -78,7 +78,7 @@ func TestProcessNextFilmAgentStepAutomaticallyAdvancesIR03Skills(t *testing.T) {
 	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
 	executor := &recordingFilmAgentExecutor{}
 	svc.filmAgentExecutor = executor
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-executor-ir03", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-executor-ir03", CreateFilmAgentRunRequest{
 		Objective: "写一个故事型TVC剧本", IntentRouteID: "IR-03", AgentID: "tvc_creative_director",
 	})
 	if err != nil {
@@ -156,7 +156,7 @@ func TestProcessNextFilmAgentStepRecordsInvalidStructuredOutputAsFailure(t *test
 		ModelRef: "fake-text-model",
 	}}}
 	svc.filmAgentExecutor = executor
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-executor-invalid", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-executor-invalid", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {
@@ -185,7 +185,7 @@ func TestRetryFilmAgentStepExecutesANewAttemptAfterStructuredOutputFailure(t *te
 		ModelRef: "fake-text-model",
 	}}}
 	svc.filmAgentExecutor = executor
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-executor-retry", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-executor-retry", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {

@@ -14,7 +14,7 @@ import (
 
 func TestFilmAgentCloseoutRequiresCompleteEvidenceAndArchivesAtomically(t *testing.T) {
 	svc, repo, db, project := newFilmAgentRuntimeTestService(t)
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-closeout-root-0001", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-closeout-root-0001", CreateFilmAgentRunRequest{
 		Objective: "写一个可交付的原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {
@@ -100,7 +100,7 @@ func TestFilmAgentCloseoutRequiresCompleteEvidenceAndArchivesAtomically(t *testi
 	if _, err := svc.FilmAgentRunDetail(project.UserID, project.ID, created.Detail.Run.ID); err != nil {
 		t.Fatalf("closed Film history must stay readable: %v", err)
 	}
-	if _, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-closeout-after-archive", CreateFilmAgentRunRequest{
+	if _, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-closeout-after-archive", CreateFilmAgentRunRequest{
 		Objective: "归档后不应创建新运行", IntentRouteID: "IR-01",
 	}); authStatus(err) != 409 {
 		t.Fatalf("create after closeout error = %v, want 409", err)
@@ -116,7 +116,7 @@ func TestFilmAgentCloseoutRequiresCompleteEvidenceAndArchivesAtomically(t *testi
 
 func TestFilmAgentCloseoutBlocksPendingHumanDecision(t *testing.T) {
 	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-closeout-pending-human", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-closeout-pending-human", CreateFilmAgentRunRequest{
 		Objective: "写一个待用户确认的原创短片故事", IntentRouteID: "IR-01", ReviewBeforeExecution: true,
 	})
 	if err != nil {
@@ -147,7 +147,7 @@ func TestFilmAgentCloseoutBlocksPendingHumanDecision(t *testing.T) {
 
 func TestFilmAgentCloseoutDoesNotExposeAnotherUsersProject(t *testing.T) {
 	svc, _, _, project := newFilmAgentRuntimeTestService(t)
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-closeout-owner", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-closeout-owner", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {
@@ -171,7 +171,7 @@ func TestFilmAgentCloseoutDoesNotExposeAnotherUsersProject(t *testing.T) {
 
 func TestFilmAgentCloseoutRejectsRegistryDrift(t *testing.T) {
 	svc, repo, db, project := newFilmAgentRuntimeTestService(t)
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-closeout-registry-drift", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-closeout-registry-drift", CreateFilmAgentRunRequest{
 		Objective: "写一个原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {
@@ -196,7 +196,7 @@ func TestFilmAgentCloseoutRejectsRegistryDrift(t *testing.T) {
 
 func TestFilmAgentCloseoutRejectsStaleEvidenceWithoutPartialArchive(t *testing.T) {
 	svc, repo, db, project := newFilmAgentRuntimeTestService(t)
-	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-closeout-stale-0001", CreateFilmAgentRunRequest{
+	created, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-closeout-stale-0001", CreateFilmAgentRunRequest{
 		Objective: "写一个可交付的原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {
@@ -228,14 +228,14 @@ func TestFilmAgentCloseoutRejectsStaleEvidenceWithoutPartialArchive(t *testing.T
 
 func TestFilmAgentCloseoutNeverMixesAnotherRootRun(t *testing.T) {
 	svc, repo, db, project := newFilmAgentRuntimeTestService(t)
-	first, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-closeout-first-0001", CreateFilmAgentRunRequest{
+	first, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-closeout-first-0001", CreateFilmAgentRunRequest{
 		Objective: "写一个可交付的原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {
 		t.Fatalf("create first RootRun: %v", err)
 	}
 	prepareReadyFilmCloseoutFixture(t, repo, db, first.Detail)
-	second, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-closeout-second-0001", CreateFilmAgentRunRequest{
+	second, err := createFilmAgentRunWithTestModel(svc, project.UserID, project.ID, "film-closeout-second-0001", CreateFilmAgentRunRequest{
 		Objective: "写另一个原创短片故事", IntentRouteID: "IR-01",
 	})
 	if err != nil {

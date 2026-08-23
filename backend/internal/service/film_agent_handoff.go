@@ -260,6 +260,12 @@ func (s *Service) ensureFilmHandoffRun(trigger model.AgentHandoffTrigger, root m
 			return "", err
 		}
 	}
+	if logicalModelID == "" {
+		return "", errors.New("Film Handoff 来源 Run 未绑定逻辑文本模型")
+	}
+	if _, err := s.ResolveLogicalModel(logicalModelID, filmAgentTextModelIntent()); err != nil {
+		return "", fmt.Errorf("Film Handoff 绑定的逻辑文本模型已不可用: %w", err)
+	}
 	runID := newID()
 	createdAt := time.Now().UTC()
 	step := model.AgentRuntimeStep{
