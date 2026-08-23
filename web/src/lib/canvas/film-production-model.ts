@@ -66,6 +66,14 @@ export function filmRunLogicalModelId(run?: Pick<FilmAgentRun, "inputJson">) {
     }
 }
 
+export type FilmRunTextModelReadiness = "missing" | "unavailable" | "available";
+
+export function filmRunTextModelReadiness(run: Pick<FilmAgentRun, "inputJson"> | undefined, models: ReadonlyArray<Pick<PublicLogicalModel, "id">>): FilmRunTextModelReadiness {
+    const logicalModelId = filmRunLogicalModelId(run);
+    if (!logicalModelId) return "missing";
+    return models.some((model) => model.id === logicalModelId) ? "available" : "unavailable";
+}
+
 function optionStringValues(values?: unknown[]) {
     return (values || []).filter((value): value is string => typeof value === "string" && value.trim() !== "").map((value) => value.trim());
 }

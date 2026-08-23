@@ -36,7 +36,7 @@ import { listLogicalModels, type PublicLogicalModel } from "@/services/api/logic
 import type { ProjectDetail } from "@/services/api/projects";
 import { latestFilmAttemptsByShot, normalizeFilmBatchShotIds, summarizeFilmBatch, type FilmBatchQuoteItem } from "@/lib/canvas/film-batch-production";
 import { collectLockedFilmInputRevisionIds, FILM_AUTO_INTENT_ROUTE, filmIntentSelection } from "@/lib/canvas/film-intent-routing";
-import { filmRunLogicalModelId, formatFilmImageOptions, resolveFilmImageOptions } from "@/lib/canvas/film-production-model";
+import { filmRunTextModelReadiness, formatFilmImageOptions, resolveFilmImageOptions, type FilmRunTextModelReadiness } from "@/lib/canvas/film-production-model";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { FilmVideoProductionSection } from "@/components/canvas/film-video-production-section";
 import { FilmVisualQCSection } from "@/components/canvas/film-visual-qc-section";
@@ -168,7 +168,11 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
     }, [shotId, shots]);
     useEffect(() => {
         if (!imageModelId && imageModels.length) setImageModelId(imageModels[0].id);
-        if (!textModelId && textModels.length) setTextModelId(textModels[0].id);
+        if (!textModels.length) {
+            if (textModelId) setTextModelId("");
+        } else if (!textModelId || !textModels.some((model) => model.id === textModelId)) {
+            setTextModelId(textModels[0].id);
+        }
     }, [imageModelId, imageModels, textModelId, textModels]);
     useEffect(() => {
         if (!selectedRoute?.requiresDisambiguation || !selectedRoute.candidateAgentIds?.includes(agentId)) setAgentId("");
@@ -501,7 +505,7 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
                             reviewBeforeExecution={reviewBeforeExecution}
                             onReviewBeforeExecutionChange={setReviewBeforeExecution}
                             pendingDecision={pendingDecision}
-                            activeRunHasTextModel={Boolean(filmRunLogicalModelId(activeRun || detail?.run))}
+                            activeRunTextModelReadiness={filmRunTextModelReadiness(activeRun || detail?.run, textModels)}
                             creating={createRunMutation.isPending}
                             onCreate={() => createRunMutation.mutate()}
                             onDecision={(action) => decisionMutation.mutate(action)}
@@ -513,7 +517,12 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
                             </div>
                         ) : detail ? (
                             <>
-                                <AgentProgressSection detail={detail} retryingStepId={retryStepMutation.isPending ? retryStepMutation.variables?.id || "" : ""} onRetry={(step) => retryStepMutation.mutate(step)} />
+                                <AgentProgressSection
+                                    detail={detail}
+                                    textModelReadiness={filmRunTextModelReadiness(detail.run, textModels)}
+                                    retryingStepId={retryStepMutation.isPending ? retryStepMutation.variables?.id || "" : ""}
+                                    onRetry={(step) => retryStepMutation.mutate(step)}
+                                />
                                 <ArtifactSection
                                     choices={artifactChoices}
                                     locking={lockMutation.isPending}
@@ -621,8 +630,8 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
                             onProductionChanged={invalidateProduction}
                             onImportSequence={onImportVideoSequence}
                         />
-                        {createRunMutation.isError || retryStepMutation.isError || quoteMutation.isError || submitMutation.isError || qcMutation.isError ? (
-                            <Alert type="error" showIcon message={readError(createRunMutation.error || retryStepMutation.error || quoteMutation.error || submitMutation.error || qcMutation.error)} />
+                        {createRunMutation.isError || decisionMutation.isError || retryStepMutation.isError || quoteMutation.isError || submitMutation.isError || qcMutation.isError ? (
+                            <Alert type="error" showIcon message={readError(createRunMutation.error || decisionMutation.error || retryStepMutation.error || quoteMutation.error || submitMutation.error || qcMutation.error)} />
                         ) : null}
                     </div>
                 </section>
@@ -631,7 +640,7 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
     );
 }
 
-function AgentProgressSection({ detail, retryingStepId, onRetry }: { detail: FilmAgentRunDetail; retryingStepId: string; onRetry: (step: FilmAgentStep) => void }) {
+function AgentProgressSection({ detail, textModelReadiness, retryingStepId, onRetry }: { detail: FilmAgentRunDetail; textModelReadiness: FilmRunTextModelReadiness; retryingStepId: string; onRetry: (step: FilmAgentStep) => void }) {
     const steps = detail.steps.slice().sort((left, right) => left.position - right.position);
     const completed = steps.filter((step) => step.status === "completed" || step.status === "skipped").length;
     return (
@@ -663,7 +672,15 @@ function AgentProgressSection({ detail, retryingStepId, onRetry }: { detail: Fil
                                 </span>
                             </span>
                             {failed ? (
-                                <Button size="small" type="text" icon={<RotateCcw className="size-3" />} loading={retryingStepId === step.id} disabled={Boolean(retryingStepId && retryingStepId !== step.id)} onClick={() => onRetry(step)}>
+                                <Button
+                                    size="small"
+                                    type="text"
+                                    icon={<RotateCcw className="size-3" />}
+                                    loading={retryingStepId === step.id}
+                                    disabled={textModelReadiness !== "available" || Boolean(retryingStepId && retryingStepId !== step.id)}
+                                    title={textModelReadiness === "available" ? "重试失败步骤" : "逻辑文本模型不可用，暂不能重试"}
+                                    onClick={() => onRetry(step)}
+                                >
                                     重试
                                 </Button>
                             ) : null}
@@ -715,7 +732,7 @@ function RunSection({
     reviewBeforeExecution,
     onReviewBeforeExecutionChange,
     pendingDecision,
-    activeRunHasTextModel,
+    activeRunTextModelReadiness,
     creating,
     onCreate,
     onDecision,
@@ -739,7 +756,7 @@ function RunSection({
     reviewBeforeExecution: boolean;
     onReviewBeforeExecutionChange: (value: boolean) => void;
     pendingDecision?: { id: string; question: string };
-    activeRunHasTextModel: boolean;
+    activeRunTextModelReadiness: FilmRunTextModelReadiness;
     creating: boolean;
     onCreate: () => void;
     onDecision: (action: "approve" | "cancel") => void;
@@ -760,7 +777,7 @@ function RunSection({
                     options={runs.map((run) => ({ value: run.id, label: `${run.intentRouteId || "Run"} · ${run.status} · ${run.objective.slice(0, 24)}` }))}
                 />
             ) : null}
-            {activeRun && pendingDecision && activeRunHasTextModel ? (
+            {activeRun && pendingDecision && activeRunTextModelReadiness === "available" ? (
                 <Alert
                     type="warning"
                     showIcon
@@ -778,18 +795,21 @@ function RunSection({
                     }
                 />
             ) : null}
-            {activeRun && pendingDecision && !activeRunHasTextModel ? (
+            {activeRun && pendingDecision && activeRunTextModelReadiness !== "available" ? (
                 <Alert
                     type="error"
                     showIcon
-                    message="此 Run 未绑定逻辑文本模型"
-                    description="确认后无法执行。请取消这条 Run，待管理员发布逻辑文本模型后重新创建。"
+                    message={activeRunTextModelReadiness === "missing" ? "此 Run 未绑定逻辑文本模型" : "此 Run 的逻辑文本模型已不可用"}
+                    description={activeRunTextModelReadiness === "missing" ? "确认后无法执行。请取消这条 Run，待管理员发布逻辑文本模型后重新创建。" : "请先恢复该模型的可用路由；需要换模型时取消这条 Run 后重新创建。"}
                     action={
                         <Button size="small" danger disabled={decisionPending} onClick={() => onDecision("cancel")}>
                             取消 Run
                         </Button>
                     }
                 />
+            ) : null}
+            {activeRun && !pendingDecision && activeRunTextModelReadiness !== "available" ? (
+                <Alert type="warning" showIcon message={activeRunTextModelReadiness === "missing" ? "此 Run 未绑定逻辑文本模型" : "逻辑文本模型暂不可用"} description="当前 Run 仍可查看；失败步骤需要在模型配置恢复后才能重试。" />
             ) : null}
             <Input.TextArea value={objective} onChange={(event) => onObjectiveChange(event.target.value)} autoSize={{ minRows: 2, maxRows: 4 }} placeholder="描述这次短剧制作目标" />
             <div className="grid grid-cols-2 gap-2">

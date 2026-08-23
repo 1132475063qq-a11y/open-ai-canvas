@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { filmRunLogicalModelId, formatFilmImageOptions, formatFilmImageQuality, resolveFilmImageOptions } from "../src/lib/canvas/film-production-model";
+import { filmRunLogicalModelId, filmRunTextModelReadiness, formatFilmImageOptions, formatFilmImageQuality, resolveFilmImageOptions } from "../src/lib/canvas/film-production-model";
 import type { PublicLogicalModel } from "../src/services/api/logical-models";
 
 function imageModel(options: Record<string, unknown[]>, defaults: Record<string, unknown> = {}) {
@@ -46,5 +46,11 @@ describe("Film production model options", () => {
         expect(filmRunLogicalModelId({ inputJson: '{"logicalModelId":"MODEL_TEXT"}' })).toBe("MODEL_TEXT");
         expect(filmRunLogicalModelId({ inputJson: "not-json" })).toBe("");
         expect(filmRunLogicalModelId({})).toBe("");
+    });
+
+    test("projects missing and unavailable pinned text models before approval", () => {
+        expect(filmRunTextModelReadiness({ inputJson: "{}" }, [{ id: "MODEL_TEXT" }])).toBe("missing");
+        expect(filmRunTextModelReadiness({ inputJson: '{"logicalModelId":"MODEL_TEXT"}' }, [])).toBe("unavailable");
+        expect(filmRunTextModelReadiness({ inputJson: '{"logicalModelId":"MODEL_TEXT"}' }, [{ id: "MODEL_TEXT" }])).toBe("available");
     });
 });

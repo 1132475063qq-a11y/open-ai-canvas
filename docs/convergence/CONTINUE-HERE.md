@@ -74,6 +74,10 @@ execution.
   a Run. Human approval and failed-Step retry recheck availability; an unbound
   legacy Run remains readable and cancellable. Automatic Handoff scheduling
   also rechecks the inherited model before creating a child Run.
+- The Film panel now projects pinned text-model readiness as missing,
+  unavailable, or available. It hides approval for unavailable Runs, disables
+  impossible retries, clears stale creation selections, and surfaces backend
+  decision errors in the panel.
 - Service and HTTP fixtures now use a complete synthetic `LogicalModel ->
 Revision -> Route -> ChannelModel -> SystemChannel` text path. Focused tests
   cover missing, unknown, archived, disabled, restored, and legacy model states.
