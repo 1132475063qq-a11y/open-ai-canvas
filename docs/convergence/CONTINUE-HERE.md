@@ -124,6 +124,8 @@ execution.
   rejects drift before quote/submit/retry/video writes. The planning Run and
   the standalone IR-01 runtime Run are intentionally not claimed to be an
   atomic pair yet.
+- Ecommerce IR-01 input normalization also rejects inline media Data URLs and
+  credential-shaped keys before durable InputJSON is written.
 - The currently observed local 4173/8080 processes were started from this
   checkout at the earlier `1406b5f` commit. Their page or API behavior is not
   evidence for the current `60a5463` tree; restart the runtime from this branch

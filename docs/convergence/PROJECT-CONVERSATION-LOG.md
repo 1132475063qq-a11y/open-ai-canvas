@@ -11,7 +11,7 @@
 当前 Git 状态：
 
 - 分支：`codex/converged-runtime`
-- HEAD：以 `git rev-parse HEAD` 为准；代码集成提交为 `60a5463`
+- HEAD：以 `git rev-parse HEAD` 为准；代码集成提交为 `60a5463`，安全边界跟进为 `5c9cda0`
 - GitHub 交接远程：`https://github.com/1132475063qq-a11y/open-ai-canvas.git`
 - 交接分支：`codex/converged-runtime`
 - 作者上游：`https://github.com/ddcat-ai/open-ai-canvas.git`
@@ -216,7 +216,7 @@ Worker 只修改自己的 Worktree 和 ownership，不调用真实 Provider，�
 
 文档提交：`77e2285 docs(ecommerce): 电商画布 - 补充并行开发与账号交接记录`
 
-当前交接协议提交：`48bba21 docs(convergence): 明确主控 Agent 交接协议`（本次代码交接见 `60a5463`）
+当前交接协议提交：`48bba21 docs(convergence): 明确主控 Agent 交接协议`（本次代码交接见 `60a5463`，安全跟进见 `5c9cda0`）
 
 已接入：
 
@@ -262,7 +262,7 @@ Agent C：Repository domain isolation/evidence tests
 - 必须等待：主控先冻结 registry IDs/Domain 字段，再把 loader、claim、worker、HTTP 路由和旧 SkillRef adapter 接入共享热点。
 - 集成顺序：registry/合同 -> IR-01 service/repository -> handler/worker/pin validation -> unified checks。
 
-主控集成提交：`60a5463 feat(ecommerce): integrate provider-free IR-01 runtime`。IR-01 不调用真实模型、图片 Provider、计费或 API Key；付费 `EcommerceProductionRun` 与独立 runtime Run 的原子关联留作后续 adapter。
+主控集成提交：`60a5463 feat(ecommerce): integrate provider-free IR-01 runtime`；安全跟进：`5c9cda0 fix(ecommerce): fence runtime input secrets and media`。IR-01 不调用真实模型、图片 Provider、计费或 API Key；付费 `EcommerceProductionRun` 与独立 runtime Run 的原子关联留作后续 adapter。
 
 ## 9. 渠道与 Provider 测试边界
 

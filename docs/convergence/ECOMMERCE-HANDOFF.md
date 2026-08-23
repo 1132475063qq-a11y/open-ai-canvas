@@ -14,7 +14,7 @@
 
 - 当前分支：`codex/converged-runtime`
 - 当前施工目录：`/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`
-- 最新 checkpoint：`60a5463 feat(ecommerce): integrate provider-free IR-01 runtime`
+- 最新 checkpoint：`5c9cda0 fix(ecommerce): fence runtime input secrets and media`（基于 `60a5463`）
 - 最新交接协议提交：`48bba21 docs(convergence): 明确主控 Agent 交接协议`
 - 当前阶段：Ecommerce registry 与 IR-01 Provider-free durable runtime 已接入；规划/生产与真实商业闭环仍分阶段推进
 - 默认输出：6 张、4K、按项目比例；数量可调整为 1-12 张
@@ -36,6 +36,7 @@
 - IR-01 `product_intelligence_agent` 已通过通用 AgentRuntime 持久化 `Run -> Step -> Attempt -> Event`、Ecommerce domain claim/lease/recovery 和 revision fencing，确定性地产出 evidence-bound `product_dna`；不创建 Provider Task、不计费
 - 已提供 Ecommerce Runtime catalog、Run 列表/创建/详情 API、前端 camelCase 合同和服务端 worker；规划生产 Run 会 pin registry，pin 漂移会阻止报价/提交/重试等写操作
 - IR-01 runtime Run 与付费 `EcommerceProductionRun` 目前保持明确分离，尚未声称两者已原子关联
+- IR-01 输入沿用 Film 的安全边界：拒绝内嵌媒体 Data URL、API Key、Token 和鉴权头，不把这些内容写入 Run InputJSON
 - 默认六镜头覆盖主视觉、环境全景、中景、动作/使用、商品特写和补充镜头
 
 ## 并行 Agent 分工
