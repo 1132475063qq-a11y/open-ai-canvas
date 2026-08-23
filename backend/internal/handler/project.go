@@ -13,6 +13,7 @@ func RegisterProjectRoutes(r *gin.RouterGroup, svc *service.Service) {
 	RegisterFilmAgentRuntimeRoutes(r, svc)
 	RegisterFilmProductionRoutes(r, svc)
 	RegisterProjectEcommerceRoutes(r, svc)
+	RegisterProjectEcommerceAgentRuntimeRoutes(r, svc)
 	r.GET("/voice-profiles", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

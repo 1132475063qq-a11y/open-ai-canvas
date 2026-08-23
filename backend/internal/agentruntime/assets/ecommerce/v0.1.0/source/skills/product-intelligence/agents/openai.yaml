@@ -1,0 +1,4 @@
+interface:
+  display_name: "商品事实分析"
+  short_description: "建立可追溯商品 DNA"
+  invocation: "implicit"

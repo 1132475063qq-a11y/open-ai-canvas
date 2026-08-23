@@ -50,6 +50,9 @@ type EcommerceProductionRun struct {
 	ProjectID                   string     `json:"projectId" gorm:"index;size:36;uniqueIndex:idx_ecommerce_run_idempotency,priority:2"`
 	IdempotencyKey              string     `json:"idempotencyKey" gorm:"size:160;uniqueIndex:idx_ecommerce_run_idempotency,priority:3"`
 	Status                      string     `json:"status" gorm:"index;size:32"`
+	RegistryID                  string     `json:"registryId" gorm:"index;size:80"`
+	RegistryVersion             string     `json:"registryVersion" gorm:"size:32"`
+	RegistryDigest              string     `json:"registryDigest" gorm:"size:64"`
 	Kernel                      string     `json:"kernel" gorm:"index;size:32"`
 	Category                    string     `json:"category" gorm:"index;size:48"`
 	PresetID                    string     `json:"presetId" gorm:"index;size:120"`

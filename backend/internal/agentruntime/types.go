@@ -8,6 +8,7 @@ type Registry struct {
 	ExpectedCounts  RegistryCounts           `json:"expectedCounts"`
 	Agents          []AgentDefinition        `json:"agents"`
 	Skills          []SkillDefinition        `json:"skills"`
+	SkillAliases    map[string]string        `json:"skillAliases"`
 	ArtifactTypes   []ArtifactTypeDefinition `json:"artifactTypes"`
 	ArtifactAliases map[string]string        `json:"artifactAliases"`
 	IntentRoutes    []IntentRouteDefinition  `json:"intentRoutes"`

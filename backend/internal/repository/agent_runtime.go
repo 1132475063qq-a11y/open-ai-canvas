@@ -143,6 +143,9 @@ type AgentRuntimeHumanResolve struct {
 }
 
 type AgentRuntimeExecutionClaimCommand struct {
+	// Domain scopes worker claims. Empty keeps the historical Film default for
+	// existing callers; Ecommerce workers must set it explicitly.
+	Domain        string
 	Owner         string
 	LeaseDuration time.Duration
 	AttemptID     string
@@ -337,6 +340,10 @@ func (r *Repository) ClaimNextAgentRuntimeExecution(command AgentRuntimeExecutio
 		return nil, errors.New("agent runtime execution claim is incomplete")
 	}
 	now := runtimeCommandTime(command.At)
+	domain := strings.TrimSpace(command.Domain)
+	if domain == "" {
+		domain = "film"
+	}
 	leaseExpiresAt := now.Add(command.LeaseDuration)
 	var result AgentRuntimeExecutionClaim
 	err := r.db.Transaction(func(tx *gorm.DB) error {
@@ -345,7 +352,7 @@ func (r *Repository) ClaimNextAgentRuntimeExecution(command AgentRuntimeExecutio
 			Select("agent_runtime_steps.*").
 			Joins("JOIN agent_runtime_runs ON agent_runtime_runs.id = agent_runtime_steps.run_id").
 			Joins("JOIN projects ON projects.id = agent_runtime_runs.project_id AND projects.user_id = agent_runtime_runs.user_id").
-			Where("agent_runtime_runs.domain = ? AND projects.status <> ?", "film", model.ProjectStatusArchived).
+			Where("agent_runtime_runs.domain = ? AND projects.status <> ?", domain, model.ProjectStatusArchived).
 			Where(`(
 				(agent_runtime_steps.status = ? AND agent_runtime_runs.status IN ?) OR
 				(agent_runtime_steps.status = ? AND agent_runtime_runs.status = ? AND (agent_runtime_steps.lease_expires_at IS NULL OR agent_runtime_steps.lease_expires_at <= ?))
@@ -658,7 +665,11 @@ func (r *Repository) CompleteAgentRuntimeExecution(command AgentRuntimeExecution
 			if err := json.Unmarshal([]byte(item.DependsOnStepIDsJSON), &dependencies); err != nil {
 				return fmt.Errorf("decode Step %s dependencies: %w", item.ID, err)
 			}
-			unblocked := len(dependencies) > 0
+			// Start optimistic: an empty dependency list is immediately
+			// executable, while each declared dependency below must be complete.
+			// Initializing from the dependency count made zero-dependency Steps
+			// permanently planned and made those routes unrecoverable.
+			unblocked := true
 			for _, dependencyID := range dependencies {
 				status := statusByID[dependencyID]
 				if status != model.AgentStepStatusCompleted && status != model.AgentStepStatusSkipped {

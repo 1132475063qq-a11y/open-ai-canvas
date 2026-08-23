@@ -196,6 +196,7 @@ type EcommerceWorkspace struct {
 	SchemaVersion  int                            `json:"schemaVersion"`
 	Artifacts      []model.EcommerceArtifact      `json:"artifacts"`
 	Presets        EcommercePresetCatalog         `json:"presets"`
+	AgentRuntime   *EcommerceAgentRuntimeCatalog  `json:"agentRuntime,omitempty"`
 	ProviderRoutes []EcommerceProviderRoute       `json:"providerRoutes"`
 	Runs           []model.EcommerceProductionRun `json:"runs"`
 	ActiveRun      *EcommerceRunView              `json:"activeRun,omitempty"`
@@ -235,7 +236,11 @@ func (s *Service) ProjectEcommerceWorkspace(userID string, projectID string) (Ec
 	if err != nil {
 		return EcommerceWorkspace{}, err
 	}
-	workspace := EcommerceWorkspace{SchemaVersion: 1, Artifacts: artifacts, Presets: presets, ProviderRoutes: routes, Runs: runs}
+	registryCatalog, registryErr := s.EcommerceAgentRuntimeCatalog(userID, project.ID)
+	if registryErr != nil {
+		return EcommerceWorkspace{}, registryErr
+	}
+	workspace := EcommerceWorkspace{SchemaVersion: 1, Artifacts: artifacts, Presets: presets, AgentRuntime: &registryCatalog, ProviderRoutes: routes, Runs: runs}
 	if len(runs) > 0 {
 		view, viewErr := s.ecommerceRunView(userID, project.ID, runs[0].ID, routes)
 		if viewErr != nil {
@@ -260,6 +265,9 @@ func (s *Service) ProjectEcommerceRun(userID string, projectID string, runID str
 func (s *Service) CreateProjectEcommerceRun(userID string, projectID string, req CreateEcommerceRunRequest) (*EcommerceRunView, error) {
 	project, err := s.requireEcommerceProject(userID, projectID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateEcommerceAgentRegistry(); err != nil {
 		return nil, err
 	}
 	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
@@ -339,7 +347,8 @@ func (s *Service) CreateProjectEcommerceRun(userID string, projectID string, req
 	now := time.Now()
 	run := model.EcommerceProductionRun{
 		ID: newID(), UserID: userID, ProjectID: project.ID, IdempotencyKey: idempotencyKey,
-		Status: EcommerceRunStatusPlanning, Kernel: preset.Kernel, Category: category,
+		Status: EcommerceRunStatusPlanning, RegistryID: s.ecommerceAgentRegistry.ID, RegistryVersion: s.ecommerceAgentRegistry.Version,
+		RegistryDigest: s.ecommerceAgentRegistry.SourceDigest, Kernel: preset.Kernel, Category: category,
 		PresetID: preset.ID, PresetVersion: preset.Version, TargetChannel: targetChannel,
 		AspectRatio: aspectRatio, Resolution: resolution, PixelSize: pixelSize,
 		OutputCount: outputCount, ReviewBeforeGeneration: req.ReviewBeforeGeneration,
@@ -358,6 +367,7 @@ func (s *Service) CreateProjectEcommerceRun(userID string, projectID string, req
 	if err != nil {
 		return nil, err
 	}
+	s.canonicalizeEcommerceArtifacts(plan.Artifacts)
 	routes, err := s.EcommerceProviderRoutes()
 	if err != nil {
 		return nil, err
@@ -414,6 +424,9 @@ func (s *Service) RefreshProjectEcommerceRunQuote(userID string, projectID strin
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateEcommerceRunRegistryPin(*run); err != nil {
+		return nil, err
+	}
 	if run.SubmittedAt != nil {
 		return nil, Conflict("该系列已经提交，不能重新报价")
 	}
@@ -450,6 +463,13 @@ func (s *Service) ApproveProjectEcommerceRun(userID string, projectID string, ru
 	if _, err := s.requireEcommerceProject(userID, projectID); err != nil {
 		return nil, err
 	}
+	run, err := s.repo.EcommerceProductionRunForUser(userID, projectID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateEcommerceRunRegistryPin(*run); err != nil {
+		return nil, err
+	}
 	if err := s.repo.ApproveEcommerceRunPlan(userID, projectID, runID, time.Now()); err != nil {
 		return nil, mapEcommerceRuntimeError(err)
 	}
@@ -462,6 +482,9 @@ func (s *Service) SubmitProjectEcommerceRun(userID string, projectID string, run
 	}
 	run, err := s.repo.EcommerceProductionRunForUser(userID, projectID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateEcommerceRunRegistryPin(*run); err != nil {
 		return nil, err
 	}
 	if run.Status == EcommerceRunStatusGenerating || run.Status == EcommerceRunStatusQA || run.Status == EcommerceRunStatusNeedsYou || run.Status == EcommerceRunStatusReady {
@@ -574,6 +597,9 @@ func (s *Service) RetryProjectEcommerceSlot(userID string, projectID string, run
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateEcommerceRunRegistryPin(*run); err != nil {
+		return nil, err
+	}
 	slot, err := s.repo.EcommerceProductionSlotForUser(userID, runID, slotID)
 	if err != nil {
 		return nil, err
@@ -660,6 +686,9 @@ func (s *Service) ReviewProjectEcommerceSlot(userID string, projectID string, ru
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateEcommerceRunRegistryPin(*run); err != nil {
+		return nil, err
+	}
 	normalized, err := normalizeEcommerceQAReview(*run, req)
 	if err != nil {
 		return nil, err
@@ -738,6 +767,9 @@ func (s *Service) CreateProjectEcommerceVideoSequence(userID string, projectID s
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateEcommerceRunRegistryPin(*run); err != nil {
+		return nil, err
+	}
 	slots, err := s.repo.EcommerceProductionSlots(runID)
 	if err != nil {
 		return nil, err
@@ -801,11 +833,11 @@ func (s *Service) CreateProjectEcommerceVideoSequence(userID string, projectID s
 	for _, slot := range accepted {
 		refs = append(refs, slot.GeneratedAssetID)
 	}
-	motionArtifact, err := plannedEcommerceArtifact(*run, EcommerceArtifactTypeMotionPlan, "motion-plan", motionPayload, refs, EcommerceAgentMotionDirector, "ecommerce.skill.motion-director")
+	motionArtifact, err := plannedEcommerceArtifact(*run, EcommerceArtifactTypeMotionPlan, "motion-plan", motionPayload, refs, EcommerceAgentMotionDirector, canonicalEcommerceSkillRef(s.ecommerceAgentRegistry, "ecommerce.skill.motion-director"))
 	if err != nil {
 		return nil, err
 	}
-	sequenceArtifact, err := plannedEcommerceArtifact(*run, EcommerceArtifactTypeVideoSequence, "video-sequence", sequencePayload, refs, EcommerceAgentMotionDirector, "ecommerce.skill.video-sequence")
+	sequenceArtifact, err := plannedEcommerceArtifact(*run, EcommerceArtifactTypeVideoSequence, "video-sequence", sequencePayload, refs, EcommerceAgentMotionDirector, canonicalEcommerceSkillRef(s.ecommerceAgentRegistry, "ecommerce.skill.video-sequence"))
 	if err != nil {
 		return nil, err
 	}

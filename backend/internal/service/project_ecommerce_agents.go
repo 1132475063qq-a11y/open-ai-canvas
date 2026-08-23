@@ -10,11 +10,14 @@ import (
 )
 
 const (
-	EcommerceAgentProductIntelligence = "ProductIntelligenceAgent"
-	EcommerceAgentCreativeDirector    = "CreativeDirectorAgent"
-	EcommerceAgentSceneDirector       = "SceneDirectorAgent"
-	EcommerceAgentMotionDirector      = "MotionDirectorAgent"
-	EcommerceAgentOrchestrator        = "EcommerceOrchestrator"
+	// These IDs are the canonical keys in the versioned Ecommerce registry.
+	// User-facing labels may remain more readable, but persisted Artifact
+	// responsibility must resolve to one registry identity.
+	EcommerceAgentProductIntelligence = "product_intelligence_agent"
+	EcommerceAgentCreativeDirector    = "creative_director_agent"
+	EcommerceAgentSceneDirector       = "scene_director_agent"
+	EcommerceAgentMotionDirector      = "motion_director_agent"
+	EcommerceAgentOrchestrator        = "ecommerce_orchestrator"
 )
 
 type ecommerceAssetFact struct {

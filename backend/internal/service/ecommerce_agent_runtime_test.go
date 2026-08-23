@@ -146,6 +146,29 @@ func TestProcessNextEcommerceAgentStepFailsDurablyOnCorruptInput(t *testing.T) {
 	}
 }
 
+func TestProcessNextEcommerceAgentStepFencesRegistryDrift(t *testing.T) {
+	svc, repo, db, project := newEcommerceAgentRuntimeTestService(t)
+	created, err := svc.CreateEcommerceAgentRun(project.UserID, project.ID, "ecommerce-ir01-drift", CreateEcommerceAgentRunRequest{Objective: "识别商品事实"})
+	if err != nil {
+		t.Fatalf("CreateEcommerceAgentRun(): %v", err)
+	}
+	if err := db.Model(&model.AgentRuntimeRun{}).Where("id = ?", created.Detail.Run.ID).Update("registry_digest", "stale-registry").Error; err != nil {
+		t.Fatalf("drift test mutation: %v", err)
+	}
+	processed, processErr := svc.ProcessNextEcommerceAgentStep()
+	if !processed || processErr == nil || authStatus(processErr) != 409 {
+		t.Fatalf("registry drift process result = %v, %v; want processed=true and 409", processed, processErr)
+	}
+	detail, err := repo.AgentRuntimeDetailForUser(project.UserID, created.Detail.Run.ID)
+	if err != nil {
+		t.Fatalf("load drifted Ecommerce Run: %v", err)
+	}
+	if detail.Run.Status != model.AgentRunStatusFailed || detail.Run.FailureCode != "ecommerce_product_intelligence_failed" ||
+		detail.Steps[0].Status != model.AgentStepStatusFailed || detail.Attempts[0].Status != model.AgentAttemptStatusFailed {
+		t.Fatalf("registry drift did not leave a fenced failure fact: %#v", detail)
+	}
+}
+
 func newEcommerceAgentRuntimeTestService(t *testing.T) (*Service, *repository.Repository, *gorm.DB, model.Project) {
 	t.Helper()
 	databasePath := filepath.Join(t.TempDir(), "ecommerce-agent-runtime.db")

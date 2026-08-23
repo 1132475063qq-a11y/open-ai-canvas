@@ -1,0 +1,4 @@
+interface:
+  display_name: "系列创意方向"
+  short_description: "生成可执行的商业镜头方向"
+  invocation: "implicit"

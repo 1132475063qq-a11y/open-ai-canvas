@@ -42,6 +42,36 @@ func TestFilmRegistryLoadsCompleteExecutableDefinitions(t *testing.T) {
 	}
 }
 
+func TestEcommerceRegistryLoadsCompleteExecutableDefinitions(t *testing.T) {
+	registry, err := LoadEcommerceRegistry()
+	if err != nil {
+		t.Fatalf("LoadEcommerceRegistry() error = %v", err)
+	}
+	if registry.ID != "ecommerce-agent-team" || registry.Version != "0.1.0" || registry.Domain != "ecommerce" {
+		t.Fatalf("unexpected Ecommerce registry identity: %#v", registry)
+	}
+	if got := len(registry.Agents); got != 5 {
+		t.Fatalf("agents = %d, want 5", got)
+	}
+	if got := len(registry.Skills); got != 9 {
+		t.Fatalf("skills = %d, want 9", got)
+	}
+	if got := len(registry.IntentRoutes); got != 5 {
+		t.Fatalf("intent routes = %d, want 5", got)
+	}
+	if got := len(registry.HandoffRoutes); got != 5 {
+		t.Fatalf("handoff routes = %d, want 5", got)
+	}
+	if len(registry.SourceDigest) != 64 {
+		t.Fatalf("source digest length = %d, want 64", len(registry.SourceDigest))
+	}
+	for _, skill := range registry.Skills {
+		if skill.Name != skill.ID || skill.Description == "" || skill.Instructions == "" || len(skill.SourceDigest) != 64 {
+			t.Fatalf("Ecommerce skill source was not compiled: %#v", skill)
+		}
+	}
+}
+
 func TestFilmRegistryHasExactAgentSkillAndRouteIDs(t *testing.T) {
 	registry, err := LoadFilmRegistry()
 	if err != nil {

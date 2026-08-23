@@ -23,30 +23,31 @@ import (
 )
 
 type Service struct {
-	repo                  *repository.Repository
-	dataDir               string
-	runtimeCapabilities   RuntimeCapabilities
-	cancelMu              sync.Mutex
-	registrationMu        sync.Mutex
-	emailCodeMu           sync.Mutex
-	redeemBatchMu         sync.Mutex
-	storageMu             sync.Mutex
-	characterTaskMu       sync.Mutex
-	activeCancels         map[string]context.CancelFunc
-	pendingStorage        map[string]int64
-	coordinator           *runtimeCoordinator
-	runtimeErr            error
-	filmAgentRegistry     *agentruntime.Registry
-	filmAgentExecutor     filmAgentExecutor
-	workerID              string
-	routeCatalogMu        sync.RWMutex
-	routeCatalogRefreshMu sync.Mutex
-	routeCatalog          *routeCatalogSnapshot
-	routeCatalogTTL       time.Duration
-	routeCatalogMaxStale  time.Duration
-	routeCatalogVersion   int64
-	routeHealthMu         sync.Mutex
-	routeHealthBlocked    map[string]time.Time
+	repo                   *repository.Repository
+	dataDir                string
+	runtimeCapabilities    RuntimeCapabilities
+	cancelMu               sync.Mutex
+	registrationMu         sync.Mutex
+	emailCodeMu            sync.Mutex
+	redeemBatchMu          sync.Mutex
+	storageMu              sync.Mutex
+	characterTaskMu        sync.Mutex
+	activeCancels          map[string]context.CancelFunc
+	pendingStorage         map[string]int64
+	coordinator            *runtimeCoordinator
+	runtimeErr             error
+	filmAgentRegistry      *agentruntime.Registry
+	ecommerceAgentRegistry *agentruntime.Registry
+	filmAgentExecutor      filmAgentExecutor
+	workerID               string
+	routeCatalogMu         sync.RWMutex
+	routeCatalogRefreshMu  sync.Mutex
+	routeCatalog           *routeCatalogSnapshot
+	routeCatalogTTL        time.Duration
+	routeCatalogMaxStale   time.Duration
+	routeCatalogVersion    int64
+	routeHealthMu          sync.Mutex
+	routeHealthBlocked     map[string]time.Time
 }
 
 const taskWorkerConcurrency = 3
@@ -210,11 +211,13 @@ func New(repo *repository.Repository, dataDir string) *Service {
 func NewWithRuntimeCapabilities(repo *repository.Repository, dataDir string, capabilities RuntimeCapabilities) *Service {
 	coordinator, coordinatorErr := newRuntimeCoordinator(repo.Dialect())
 	filmRegistry, registryErr := agentruntime.LoadFilmRegistry()
+	ecommerceRegistry, ecommerceRegistryErr := agentruntime.LoadEcommerceRegistry()
 	service := &Service{
 		repo: repo, dataDir: dataDir, runtimeCapabilities: capabilities,
 		activeCancels: make(map[string]context.CancelFunc), coordinator: coordinator,
-		runtimeErr: errors.Join(coordinatorErr, registryErr), filmAgentRegistry: filmRegistry,
-		workerID: newID(), routeCatalogTTL: 30 * time.Second, routeCatalogMaxStale: 5 * time.Minute,
+		runtimeErr: errors.Join(coordinatorErr, registryErr, ecommerceRegistryErr), filmAgentRegistry: filmRegistry,
+		ecommerceAgentRegistry: ecommerceRegistry,
+		workerID:               newID(), routeCatalogTTL: 30 * time.Second, routeCatalogMaxStale: 5 * time.Minute,
 		routeHealthBlocked: make(map[string]time.Time),
 	}
 	service.filmAgentExecutor = &queuedFilmAgentExecutor{service: service, pollInterval: 500 * time.Millisecond}
@@ -226,6 +229,7 @@ func (s *Service) StartWorker() {
 	s.startProviderCancellationReconciliation()
 	s.startBillingReviewAudit()
 	s.startFilmAgentWorker()
+	s.startEcommerceAgentWorker()
 	s.startFilmAgentHandoffWorker()
 	go func() {
 		slots := make(chan struct{}, maxChannelConcurrencyLimit)

@@ -1,0 +1,211 @@
+{
+  "schemaVersion": "1.0",
+  "id": "ecommerce-agent-team",
+  "version": "0.1.0",
+  "domain": "ecommerce",
+  "expectedCounts": {
+    "agents": 5,
+    "skills": 9,
+    "intentRoutes": 5,
+    "handoffRoutes": 5
+  },
+  "agents": [
+    {
+      "id": "ecommerce_orchestrator",
+      "instructionPath": "source/agents/ecommerce-orchestrator.toml",
+      "skillIds": ["ecommerce-orchestration"]
+    },
+    {
+      "id": "product_intelligence_agent",
+      "instructionPath": "source/agents/product-intelligence-agent.toml",
+      "skillIds": ["product-intelligence"]
+    },
+    {
+      "id": "creative_director_agent",
+      "instructionPath": "source/agents/creative-director-agent.toml",
+      "skillIds": ["creative-direction", "ecommerce-shot-plan", "model-interaction-top-wear", "still-life-lifestyle-tabletop"]
+    },
+    {
+      "id": "scene_director_agent",
+      "instructionPath": "source/agents/scene-director-agent.toml",
+      "skillIds": ["scene-pack"]
+    },
+    {
+      "id": "motion_director_agent",
+      "instructionPath": "source/agents/motion-director-agent.toml",
+      "skillIds": ["motion-director", "video-sequence"]
+    }
+  ],
+  "skills": [
+    {"id": "ecommerce-orchestration", "version": "1.0.0", "instructionPath": "source/skills/ecommerce-orchestration/SKILL.md", "ownerAgentIds": ["ecommerce_orchestrator"]},
+    {"id": "product-intelligence", "version": "1.0.0", "instructionPath": "source/skills/product-intelligence/SKILL.md", "ownerAgentIds": ["product_intelligence_agent"]},
+    {"id": "creative-direction", "version": "1.0.0", "instructionPath": "source/skills/creative-direction/SKILL.md", "ownerAgentIds": ["creative_director_agent"]},
+    {"id": "ecommerce-shot-plan", "version": "1.0.0", "instructionPath": "source/skills/ecommerce-shot-plan/SKILL.md", "ownerAgentIds": ["creative_director_agent"]},
+    {"id": "model-interaction-top-wear", "version": "1.0.0", "instructionPath": "source/skills/model-interaction-top-wear/SKILL.md", "ownerAgentIds": ["creative_director_agent"]},
+    {"id": "still-life-lifestyle-tabletop", "version": "1.0.0", "instructionPath": "source/skills/still-life-lifestyle-tabletop/SKILL.md", "ownerAgentIds": ["creative_director_agent"]},
+    {"id": "scene-pack", "version": "1.0.0", "instructionPath": "source/skills/scene-pack/SKILL.md", "ownerAgentIds": ["scene_director_agent"]},
+    {"id": "motion-director", "version": "1.0.0", "instructionPath": "source/skills/motion-director/SKILL.md", "ownerAgentIds": ["motion_director_agent"]},
+    {"id": "video-sequence", "version": "1.0.0", "instructionPath": "source/skills/video-sequence/SKILL.md", "ownerAgentIds": ["motion_director_agent"]}
+  ],
+  "skillAliases": {
+    "model-interaction.top-wear": "model-interaction-top-wear",
+    "still-life.lifestyle-tabletop": "still-life-lifestyle-tabletop",
+    "ecommerce.skill.model-interaction.top-wear": "model-interaction-top-wear",
+    "ecommerce.skill.still-life.lifestyle-tabletop": "still-life-lifestyle-tabletop"
+  },
+  "artifactTypes": [
+    {"id": "product_upload", "domain": "ecommerce", "responsible": "product_intelligence_agent"},
+    {"id": "product_dna", "domain": "ecommerce", "responsible": "product_intelligence_agent"},
+    {"id": "model_profile", "domain": "ecommerce", "responsible": "scene_director_agent"},
+    {"id": "scene_pack", "domain": "ecommerce", "responsible": "scene_director_agent"},
+    {"id": "preset_snapshot", "domain": "ecommerce", "responsible": "ecommerce_orchestrator"},
+    {"id": "creative_direction", "domain": "ecommerce", "responsible": "creative_director_agent"},
+    {"id": "scene_plan", "domain": "ecommerce", "responsible": "scene_director_agent"},
+    {"id": "creative_shot_plan", "domain": "ecommerce", "responsible": "creative_director_agent"},
+    {"id": "generation_job", "domain": "ecommerce", "responsible": "ecommerce_orchestrator"},
+    {"id": "generation_request", "domain": "ecommerce", "responsible": "ecommerce_orchestrator"},
+    {"id": "generated_asset", "domain": "ecommerce", "responsible": "ecommerce_orchestrator"},
+    {"id": "qa_report", "domain": "ecommerce", "responsible": "ecommerce_orchestrator"},
+    {"id": "motion_plan", "domain": "ecommerce", "responsible": "motion_director_agent"},
+    {"id": "video_sequence", "domain": "ecommerce", "responsible": "motion_director_agent"}
+  ],
+  "artifactAliases": {
+    "product-dna": "product_dna",
+    "scene-pack": "scene_pack",
+    "shot-plan": "creative_shot_plan",
+    "generated-image": "generated_asset",
+    "qa": "qa_report",
+    "video-plan": "video_sequence"
+  },
+  "intentRoutes": [
+    {
+      "id": "IR-01",
+      "name": "商品事实分析",
+      "triggerPhrases": ["分析商品资产", "建立商品 DNA", "识别商品事实"],
+      "primaryAgentId": "product_intelligence_agent",
+      "skillIds": ["product-intelligence"],
+      "requiredInputArtifactTypes": [],
+      "optionalInputArtifactTypes": ["product_upload"],
+      "outputArtifactTypes": ["product_dna"]
+    },
+    {
+      "id": "IR-02",
+      "name": "系列创意规划",
+      "triggerPhrases": ["规划电商系列图", "设计商拍镜头", "生成六镜头方案"],
+      "primaryAgentId": "creative_director_agent",
+      "skillIds": ["creative-direction", "ecommerce-shot-plan"],
+      "stepOutputArtifactTypes": [["creative_direction"], ["creative_shot_plan"]],
+      "requiredInputArtifactTypes": ["product_dna"],
+      "optionalInputArtifactTypes": ["scene_pack"],
+      "outputArtifactTypes": ["creative_shot_plan"]
+    },
+    {
+      "id": "IR-03",
+      "name": "场景包规划",
+      "triggerPhrases": ["规划商品场景", "建立 Scene Pack", "设计统一场景"],
+      "primaryAgentId": "scene_director_agent",
+      "skillIds": ["scene-pack"],
+      "requiredInputArtifactTypes": ["product_dna"],
+      "optionalInputArtifactTypes": ["creative_direction"],
+      "outputArtifactTypes": ["scene_pack"]
+    },
+    {
+      "id": "IR-04",
+      "name": "图片转视频编排",
+      "triggerPhrases": ["把接受的商品图编成视频", "创建电商视频序列", "规划商品短片"],
+      "primaryAgentId": "motion_director_agent",
+      "skillIds": ["motion-director", "video-sequence"],
+      "stepOutputArtifactTypes": [["motion_plan"], ["video_sequence"]],
+      "requiredInputArtifactTypes": ["generated_asset"],
+      "optionalInputArtifactTypes": ["qa_report"],
+      "outputArtifactTypes": ["video_sequence"]
+    },
+    {
+      "id": "IR-05",
+      "name": "电商生产编排",
+      "triggerPhrases": ["执行电商生产计划", "准备付费生成", "锁定商拍生成请求"],
+      "primaryAgentId": "ecommerce_orchestrator",
+      "skillIds": ["ecommerce-orchestration"],
+      "requiredInputArtifactTypes": ["creative_shot_plan", "scene_pack"],
+      "optionalInputArtifactTypes": ["preset_snapshot"],
+      "outputArtifactTypes": ["generation_request"]
+    }
+  ],
+  "handoffRoutes": [
+    {
+      "id": "HR-01",
+      "name": "商品事实交给创意总监",
+      "fromAgentIds": ["product_intelligence_agent"],
+      "toAgentIds": ["creative_director_agent"],
+      "skillIds": ["creative-direction"],
+      "inputArtifactTypes": ["product_dna"],
+      "requiredInputArtifactGroups": [["product_dna"]],
+      "inputResolutionMode": "static",
+      "outputArtifactTypes": ["creative_direction"],
+      "messageType": "request",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    },
+    {
+      "id": "HR-02",
+      "name": "创意交给场景导演",
+      "fromAgentIds": ["creative_director_agent"],
+      "toAgentIds": ["scene_director_agent"],
+      "skillIds": ["scene-pack"],
+      "inputArtifactTypes": ["product_dna", "creative_direction"],
+      "requiredInputArtifactGroups": [["product_dna"], ["creative_direction"]],
+      "inputResolutionMode": "static",
+      "outputArtifactTypes": ["scene_pack"],
+      "messageType": "request",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    },
+    {
+      "id": "HR-03",
+      "name": "系列规划交给生产编排",
+      "fromAgentIds": ["creative_director_agent", "scene_director_agent"],
+      "toAgentIds": ["ecommerce_orchestrator"],
+      "skillIds": ["ecommerce-orchestration"],
+      "inputArtifactTypes": ["creative_shot_plan", "scene_pack"],
+      "requiredInputArtifactGroups": [["creative_shot_plan"], ["scene_pack"]],
+      "inputResolutionMode": "static",
+      "outputArtifactTypes": ["generation_request"],
+      "messageType": "request",
+      "executionMode": "orchestration",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    },
+    {
+      "id": "HR-04",
+      "name": "接受图片交给运动导演",
+      "fromAgentIds": ["ecommerce_orchestrator"],
+      "toAgentIds": ["motion_director_agent"],
+      "skillIds": ["motion-director", "video-sequence"],
+      "inputArtifactTypes": ["generated_asset"],
+      "requiredInputArtifactGroups": [["generated_asset"]],
+      "inputResolutionMode": "static",
+      "outputArtifactTypes": ["video_sequence"],
+      "messageType": "request",
+      "executionMode": "agent",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    },
+    {
+      "id": "HR-05",
+      "name": "QA 结果回交生产编排",
+      "fromAgentIds": ["motion_director_agent", "creative_director_agent"],
+      "toAgentIds": ["ecommerce_orchestrator"],
+      "skillIds": ["ecommerce-orchestration"],
+      "inputArtifactTypes": ["qa_report"],
+      "requiredInputArtifactGroups": [["qa_report"]],
+      "inputResolutionMode": "static",
+      "outputArtifactTypes": ["generation_request"],
+      "messageType": "notification",
+      "executionMode": "orchestration",
+      "requiresLockedInput": true,
+      "fanout": "single"
+    }
+  ]
+}

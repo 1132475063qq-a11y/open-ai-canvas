@@ -616,7 +616,7 @@ func completeEcommerceProductionTask(tx *gorm.DB, task *model.Task, results []mo
 	artifact := model.EcommerceArtifact{
 		ID: newRepositoryID(), ProjectID: attempt.ProjectID, ArtifactKey: "run:" + attempt.RunID + ":slot:" + attempt.SlotID + ":generated",
 		ArtifactType: "generated_asset", SchemaVersion: 1, Lifecycle: "finalized", Evidence: "recorded",
-		ResponsibleAgentID: "EcommerceOrchestrator", PayloadJSON: string(encoded), SourceRefsJSON: string(refs), AuthorityRefsJSON: "[]",
+		ResponsibleAgentID: "ecommerce_orchestrator", PayloadJSON: string(encoded), SourceRefsJSON: string(refs), AuthorityRefsJSON: "[]",
 		CreatedAt: completedAt, UpdatedAt: completedAt,
 	}
 	if err := appendEcommerceArtifactVersion(tx, &artifact); err != nil {

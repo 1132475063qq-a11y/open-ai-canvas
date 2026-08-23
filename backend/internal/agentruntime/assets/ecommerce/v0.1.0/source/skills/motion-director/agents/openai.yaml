@@ -1,0 +1,4 @@
+interface:
+  display_name: "商品运动导演"
+  short_description: "把静帧编排成安全运动"
+  invocation: "implicit"

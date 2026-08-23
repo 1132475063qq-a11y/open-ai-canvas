@@ -201,6 +201,9 @@ func (s *Service) ProcessNextEcommerceAgentStep() (bool, error) {
 	if err != nil || claim == nil {
 		return false, err
 	}
+	if err := s.validateEcommerceAgentRuntimeRunRegistryPin(claim.Run); err != nil {
+		return true, s.failEcommerceAgentClaim(*claim, claim.Attempt.Revision, err)
+	}
 	return true, s.executeEcommerceAgentClaim(*claim)
 }
 

@@ -594,6 +594,47 @@ func TestCompleteAgentRuntimeExecutionCommitsArtifactsAndUnblocksNextStepAtomica
 	}
 }
 
+func TestCompleteAgentRuntimeExecutionUnblocksZeroDependencyStep(t *testing.T) {
+	db := openAgentRuntimeTestDB(t, filepath.Join(t.TempDir(), "agent-runtime-zero-dependency.db"))
+	repo := New(db)
+	now := time.Now().UTC()
+	bundle := agentRuntimeTestBundle("run-zero-dependency", "zero-dependency-request", now)
+	next := bundle.Steps[0]
+	next.ID = "run-zero-dependency-step-2"
+	next.StepKey = "intent:IR-01:independent"
+	next.Position = 1
+	next.Status = model.AgentStepStatusPlanned
+	next.DependsOnStepIDsJSON = "[]"
+	next.CreatedAt = now.Add(time.Millisecond)
+	next.UpdatedAt = next.CreatedAt
+	bundle.Steps = append(bundle.Steps, next)
+	createAgentRuntimeTestProject(t, db, bundle.Run.ProjectID, bundle.Run.UserID)
+	if err := repo.CreateAgentRuntimeBundle(bundle); err != nil {
+		t.Fatalf("create zero-dependency bundle: %v", err)
+	}
+	claim, err := repo.ClaimNextAgentRuntimeExecution(AgentRuntimeExecutionClaimCommand{
+		Owner: "worker-zero", LeaseDuration: time.Minute, AttemptID: "attempt-zero", TaskID: "task-zero",
+		EventID: "event-zero-claim", Executor: "executor-zero", At: now.Add(time.Second),
+	})
+	if err != nil || claim == nil {
+		t.Fatalf("claim first Step: claim=%#v error=%v", claim, err)
+	}
+	completed, err := repo.CompleteAgentRuntimeExecution(AgentRuntimeExecutionCompleteCommand{
+		Owner: "worker-zero", UserID: claim.Run.UserID, RunID: claim.Run.ID, StepID: claim.Step.ID, AttemptID: claim.Attempt.ID,
+		ExpectedRunRevision: claim.Run.Revision, ExpectedStepRevision: claim.Step.Revision, ExpectedAttemptRevision: claim.Attempt.Revision,
+		ResponseJSON: `{"schemaVersion":1,"summary":"done","artifacts":[]}`,
+		Event:        AgentRuntimeEventInput{ID: "event-zero-success", EventType: "attempt.succeeded", ActorType: "executor", ActorID: "executor-zero"},
+		At:           now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("complete first Step: %v", err)
+	}
+	if completed.Run.Status != model.AgentRunStatusReady || len(completed.ReadySteps) != 1 || completed.ReadySteps[0].ID != next.ID ||
+		completed.ReadySteps[0].Status != model.AgentStepStatusReady {
+		t.Fatalf("zero-dependency Step was not unblocked: %#v", completed)
+	}
+}
+
 func TestCompleteAgentRuntimeExecutionRollsBackEveryFactWhenAnArtifactWriteFails(t *testing.T) {
 	db := openAgentRuntimeTestDB(t, filepath.Join(t.TempDir(), "agent-runtime.db"))
 	repo := New(db)

@@ -40,8 +40,30 @@ type FilmAgentRuntimeCatalog struct {
 	ArtifactTypes []agentruntime.ArtifactTypeDefinition `json:"artifactTypes"`
 }
 
+type EcommerceAgentCatalogAgent struct {
+	ID          string   `json:"id"`
+	Description string   `json:"description"`
+	SkillIDs    []string `json:"skillIds"`
+}
+
+type EcommerceAgentCatalogSkill struct {
+	ID            string   `json:"id"`
+	Version       string   `json:"version"`
+	Description   string   `json:"description"`
+	OwnerAgentIDs []string `json:"ownerAgentIds"`
+}
+
+type EcommerceAgentRuntimeCatalog struct {
+	Registry      AgentRuntimeRegistrySummary           `json:"registry"`
+	Agents        []EcommerceAgentCatalogAgent          `json:"agents"`
+	Skills        []EcommerceAgentCatalogSkill          `json:"skills"`
+	IntentRoutes  []agentruntime.IntentRouteDefinition  `json:"intentRoutes"`
+	HandoffRoutes []agentruntime.HandoffRouteDefinition `json:"handoffRoutes"`
+	ArtifactTypes []agentruntime.ArtifactTypeDefinition `json:"artifactTypes"`
+}
+
 func (s *Service) FilmAgentRuntimeRegistrySummary() (AgentRuntimeRegistrySummary, error) {
-	if err := s.ValidateRuntime(); err != nil {
+	if err := s.validateFilmAgentRegistry(); err != nil {
 		return AgentRuntimeRegistrySummary{}, err
 	}
 	if s.filmAgentRegistry == nil {
@@ -79,6 +101,51 @@ func (s *Service) FilmAgentRuntimeCatalog(userID string, projectID string) (Film
 	}
 	for _, definition := range s.filmAgentRegistry.Skills {
 		catalog.Skills = append(catalog.Skills, FilmAgentCatalogSkill{
+			ID: definition.ID, Version: definition.Version, Description: definition.Description,
+			OwnerAgentIDs: append([]string(nil), definition.OwnerAgentIDs...),
+		})
+	}
+	return catalog, nil
+}
+
+func (s *Service) EcommerceAgentRuntimeRegistrySummary() (AgentRuntimeRegistrySummary, error) {
+	if err := s.validateEcommerceAgentRegistry(); err != nil {
+		return AgentRuntimeRegistrySummary{}, err
+	}
+	if s.ecommerceAgentRegistry == nil {
+		return AgentRuntimeRegistrySummary{}, errors.New("Ecommerce Agent Runtime 注册表未初始化")
+	}
+	return AgentRuntimeRegistrySummary{
+		ID: s.ecommerceAgentRegistry.ID, Version: s.ecommerceAgentRegistry.Version, Domain: s.ecommerceAgentRegistry.Domain,
+		SourceDigest: s.ecommerceAgentRegistry.SourceDigest, AgentCount: len(s.ecommerceAgentRegistry.Agents),
+		SkillCount: len(s.ecommerceAgentRegistry.Skills), IntentRouteCount: len(s.ecommerceAgentRegistry.IntentRoutes),
+		HandoffRouteCount: len(s.ecommerceAgentRegistry.HandoffRoutes),
+	}, nil
+}
+
+func (s *Service) EcommerceAgentRuntimeCatalog(userID string, projectID string) (EcommerceAgentRuntimeCatalog, error) {
+	if _, err := s.ecommerceProjectForRead(userID, projectID); err != nil {
+		return EcommerceAgentRuntimeCatalog{}, err
+	}
+	summary, err := s.EcommerceAgentRuntimeRegistrySummary()
+	if err != nil {
+		return EcommerceAgentRuntimeCatalog{}, err
+	}
+	catalog := EcommerceAgentRuntimeCatalog{
+		Registry:      summary,
+		Agents:        make([]EcommerceAgentCatalogAgent, 0, len(s.ecommerceAgentRegistry.Agents)),
+		Skills:        make([]EcommerceAgentCatalogSkill, 0, len(s.ecommerceAgentRegistry.Skills)),
+		IntentRoutes:  append([]agentruntime.IntentRouteDefinition(nil), s.ecommerceAgentRegistry.IntentRoutes...),
+		HandoffRoutes: append([]agentruntime.HandoffRouteDefinition(nil), s.ecommerceAgentRegistry.HandoffRoutes...),
+		ArtifactTypes: append([]agentruntime.ArtifactTypeDefinition(nil), s.ecommerceAgentRegistry.ArtifactTypes...),
+	}
+	for _, definition := range s.ecommerceAgentRegistry.Agents {
+		catalog.Agents = append(catalog.Agents, EcommerceAgentCatalogAgent{
+			ID: definition.ID, Description: definition.Description, SkillIDs: append([]string(nil), definition.SkillIDs...),
+		})
+	}
+	for _, definition := range s.ecommerceAgentRegistry.Skills {
+		catalog.Skills = append(catalog.Skills, EcommerceAgentCatalogSkill{
 			ID: definition.ID, Version: definition.Version, Description: definition.Description,
 			OwnerAgentIDs: append([]string(nil), definition.OwnerAgentIDs...),
 		})

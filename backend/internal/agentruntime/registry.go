@@ -19,13 +19,18 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const filmAssetRoot = "assets/film/v1.3.1"
-const filmManifestPath = filmAssetRoot + "/registry.json"
+const (
+	filmAssetRoot         = "assets/film/v1.3.1"
+	filmManifestPath      = filmAssetRoot + "/registry.json"
+	ecommerceAssetRoot    = "assets/ecommerce/v0.1.0"
+	ecommerceManifestPath = ecommerceAssetRoot + "/registry.json"
+)
 
-//go:embed assets/film/v1.3.1
+//go:embed assets/film/v1.3.1 assets/ecommerce/v0.1.0
 var registryAssets embed.FS
 
 var definitionIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+var skillAliasPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]*$`)
 var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 var intentRouteIDPattern = regexp.MustCompile(`^IR-(0[1-9]|1[0-5])$`)
 var handoffRouteIDPattern = regexp.MustCompile(`^HR-(0[1-9]|1[01])$`)
@@ -43,24 +48,35 @@ type skillFrontmatter struct {
 }
 
 func LoadFilmRegistry() (*Registry, error) {
-	data, err := registryAssets.ReadFile(filmManifestPath)
+	return loadRegistry(filmAssetRoot, filmManifestPath)
+}
+
+// LoadEcommerceRegistry loads the provider-neutral Ecommerce Agent/Skill
+// contract. It is intentionally independent from provider configuration: a
+// valid registry proves executable routing metadata, not model availability.
+func LoadEcommerceRegistry() (*Registry, error) {
+	return loadRegistry(ecommerceAssetRoot, ecommerceManifestPath)
+}
+
+func loadRegistry(assetRoot string, manifestPath string) (*Registry, error) {
+	data, err := registryAssets.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("read film registry: %w", err)
+		return nil, fmt.Errorf("read %s registry: %w", assetRoot, err)
 	}
 	var registry Registry
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&registry); err != nil {
-		return nil, fmt.Errorf("decode film registry: %w", err)
+		return nil, fmt.Errorf("decode %s registry: %w", assetRoot, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return nil, errors.New("decode film registry: trailing JSON value")
+		return nil, fmt.Errorf("decode %s registry: trailing JSON value", assetRoot)
 	}
 	digests := []string{digestBytes(data)}
 	for index := range registry.Agents {
 		definition := &registry.Agents[index]
-		sourceData, sourcePath, err := readVersionedSource(definition.InstructionPath)
+		sourceData, sourcePath, err := readVersionedSource(assetRoot, definition.InstructionPath)
 		if err != nil {
 			return nil, fmt.Errorf("agent %s: %w", definition.ID, err)
 		}
@@ -85,7 +101,7 @@ func LoadFilmRegistry() (*Registry, error) {
 	}
 	for index := range registry.Skills {
 		definition := &registry.Skills[index]
-		sourceData, sourcePath, err := readVersionedSource(definition.InstructionPath)
+		sourceData, sourcePath, err := readVersionedSource(assetRoot, definition.InstructionPath)
 		if err != nil {
 			return nil, fmt.Errorf("skill %s: %w", definition.ID, err)
 		}
@@ -107,7 +123,7 @@ func LoadFilmRegistry() (*Registry, error) {
 		digests = append(digests, sourcePath+":"+treeDigest)
 	}
 	if err := registry.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("validate %s registry: %w", assetRoot, err)
 	}
 	sort.Strings(digests)
 	registry.SourceDigest = digestBytes([]byte(strings.Join(digests, "\n")))
@@ -179,6 +195,14 @@ func (registry *Registry) Validate() error {
 			if !contains(skill.OwnerAgentIDs, agent.ID) {
 				return fmt.Errorf("agent %s is not an owner of skill %s", agent.ID, skillID)
 			}
+		}
+	}
+	for alias, canonical := range registry.SkillAliases {
+		if !skillAliasPattern.MatchString(alias) {
+			return fmt.Errorf("invalid skill alias %q", alias)
+		}
+		if _, ok := skills[canonical]; !ok {
+			return fmt.Errorf("skill alias %s targets unknown skill %s", alias, canonical)
 		}
 	}
 
@@ -366,13 +390,27 @@ func (registry *Registry) CanonicalArtifactType(value string) (string, bool) {
 	return canonical, ok
 }
 
-func readVersionedSource(relative string) ([]byte, string, error) {
+// CanonicalSkillID accepts a manifest ID or an explicitly declared external
+// alias. Aliases keep existing frontend Skill references readable while the
+// durable runtime stores one canonical registry identity.
+func (registry *Registry) CanonicalSkillID(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	for _, skill := range registry.Skills {
+		if skill.ID == value {
+			return value, true
+		}
+	}
+	canonical, ok := registry.SkillAliases[value]
+	return canonical, ok
+}
+
+func readVersionedSource(assetRoot string, relative string) ([]byte, string, error) {
 	clean := path.Clean(relative)
 	if clean == "." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
 		return nil, "", errors.New("source path escapes the registry")
 	}
-	full := path.Join(filmAssetRoot, clean)
-	if !strings.HasPrefix(full, filmAssetRoot+"/source/") {
+	full := path.Join(assetRoot, clean)
+	if !strings.HasPrefix(full, assetRoot+"/source/") {
 		return nil, "", errors.New("source path is outside the versioned source directory")
 	}
 	data, err := registryAssets.ReadFile(full)

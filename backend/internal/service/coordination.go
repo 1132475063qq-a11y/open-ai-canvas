@@ -314,11 +314,28 @@ func (s *Service) ValidateRuntime() error {
 	if s.runtimeErr != nil {
 		return s.runtimeErr
 	}
+	if err := s.validateFilmAgentRegistry(); err != nil {
+		return err
+	}
+	return s.validateEcommerceAgentRegistry()
+}
+
+func (s *Service) validateFilmAgentRegistry() error {
 	if s.filmAgentRegistry == nil {
 		return errors.New("Film Agent Runtime 注册表未初始化")
 	}
 	if err := s.filmAgentRegistry.Validate(); err != nil {
 		return fmt.Errorf("Film Agent Runtime 注册表无效：%w", err)
+	}
+	return nil
+}
+
+func (s *Service) validateEcommerceAgentRegistry() error {
+	if s.ecommerceAgentRegistry == nil {
+		return errors.New("Ecommerce Agent Runtime 注册表未初始化")
+	}
+	if err := s.ecommerceAgentRegistry.Validate(); err != nil {
+		return fmt.Errorf("Ecommerce Agent Runtime 注册表无效：%w", err)
 	}
 	return nil
 }
