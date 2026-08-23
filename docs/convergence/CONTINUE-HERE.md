@@ -13,6 +13,26 @@ commits, and account handoff. Do not continue from the historical checkout at
 `/Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas` unless it has
 first been fast-forwarded and independently checked.
 
+## Agent Handoff Protocol
+
+The handoff does not transfer live Agent sessions. Do not recreate every Agent
+just because the account changed: inspect the current branches, Worktrees, HEAD,
+and uncommitted ownership first. Reuse a valid Worker when its scope and saved
+changes are clear; recreate only a missing, detached, abandoned, or explicitly
+finished Worker, preserving any uncommitted changes before rebuilding. The
+canonical task-splitting template, dependency rules, ownership boundaries,
+integration responsibilities, and final `typecheck`/`lint`/`tests`/`build`
+report format are recorded in
+`docs/convergence/ECOMMERCE-HANDOFF.md` §“主控 Agent 接手与并行开发协议” and
+`docs/convergence/PROJECT-CONVERSATION-LOG.md` §7.1–7.2.
+
+At the beginning of each new task, the primary Agent must record 3–5 bounded
+subtasks (unless fewer are genuinely needed), mark parallel versus serial
+dependencies, and assign one owner per file. Shared contracts come first; the
+primary Agent integrates Worker commits and reports unavailable checks as
+`NOT AVAILABLE/BLOCKED` rather than claiming success. No real Provider or
+credential may be used during this handoff-only phase.
+
 ## Current Product Boundary
 
 The durable Film and Ecommerce control planes are implemented, but the final

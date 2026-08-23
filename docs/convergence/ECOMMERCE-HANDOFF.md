@@ -72,6 +72,80 @@
 
 主 Worktree 唯一允许修改共享热点：`project.tsx`、`use-canvas-store.ts`、`web/src/types/canvas.ts`、`router.tsx`、`globals.css`、前端 package/lockfile，以及后端总路由、迁移注册和跨域基础设施。
 
+## 主控 Agent 接手与并行开发协议
+
+### 先判断是否需要重新建立 Agent
+
+账号切换或对话交接不会迁移正在运行的 Agent 会话；能迁移的是仓库、提交、分支和已创建的 Worktree。因而新主控接手时**不应盲目重建全部 Agent**，先检查当前 Git 状态和 Worktree：
+
+```bash
+git fetch --all --prune
+git worktree list --porcelain
+git status --short --branch
+git rev-parse HEAD
+```
+
+- 现有 Worktree、分支和未提交改动属于代码状态，不等同于仍有一个活跃 Agent；必须先查看其分支、基线和脏改动。
+- 分支存在、ownership 仍有效且改动有人负责时，沿用该 Worktree，并通过交接报告继续，不重复派发相同范围。
+- 只有在 Worktree/分支缺失、脱离主线、已明确废弃，或原 Agent 明确结束且改动已保存时，才重新建立对应 Agent。删除或重建前必须先保存/审查未提交改动，禁止 `reset`、`clean` 或覆盖其他 Worker 的工作。
+- 无法确认某个 Agent 是否仍在运行时，按“代码状态保留、任务派发不重复”的原则处理；先认领一个明确的新任务，再记录旧任务为待确认。
+
+### 主控 Agent 的任务拆分模板
+
+每个新需求在修改代码前，由主控 Agent 写出 3–5 个有明确边界的子任务（不足 3 个时不人为拆分），并在交接或任务记录中填写：
+
+```text
+【任务拆分】
+Agent A：<任务名>
+- 目标：<可验证结果>
+- ownership：<允许修改的文件/目录；共享热点由谁处理>
+- 输入：<依赖的类型、Schema、接口、基线提交>
+- 输出：<提交、接口、测试或文档产物>
+- 验收：<focused test / 静态检查 / 浏览器证据>
+
+Agent B：...
+
+【依赖关系】
+- 可并行：<互不重叠文件且输入合同已冻结的任务>
+- 必须等待：<共享类型、Schema、核心抽象或前置迁移完成后才能开始的任务>
+- 集成顺序：<按依赖列出合并顺序>
+```
+
+共享类型、接口、Schema、数据库迁移和核心抽象必须先由一个负责人完成并验证，再启动依赖它们的 Worker。每个文件只能有一个明确 owner；跨 ownership 修改必须先由主控协调，不得以“顺手修复”为由扩大范围。
+
+### 主控集成与统一验证
+
+主控 Agent 负责汇总每个 Worker 的提交和报告，检查 diff 是否越过 ownership，按依赖顺序合并/拣选提交，解决冲突，并在集成后执行统一验证。Worker 不直接改主 Worktree 的共享热点，也不以局部测试通过代替集成验收。
+
+每个子任务完成后至少运行其 focused 检查；整合完成后依次尝试并记录：
+
+```bash
+pnpm run typecheck
+pnpm run lint                 # 若 package 没有 lint script，明确记录 NOT AVAILABLE
+pnpm test                     # 或仓库约定的 focused/full test 命令
+pnpm run build
+```
+
+后端按实际改动补充对应的 `go test` 命令。工具、脚本或端口不可用时必须报告 `BLOCKED/NOT AVAILABLE` 及原因，不能把未运行写成通过；静态、浏览器和真实 Provider 证据仍须分层记录。
+
+### 子任务完成报告格式
+
+每个 Worker 返回：
+
+```text
+【子任务报告】
+- 任务/Agent：
+- 状态：DONE / BLOCKED / NEEDS_REVIEW
+- 提交：<commit SHA 和主题>
+- 修改文件：<完整路径列表>
+- 输入/接口变化：<如有>
+- focused 验证：<命令与结果>
+- 风险与未完成项：
+- 是否越过 ownership：是/否；如是，说明主控批准
+```
+
+主控最终汇报必须汇总完成的功能、每个 Agent 的产出、修改文件、typecheck/lint/tests/build 结果、发现的问题和仍存风险；未授权 Provider、API Key 或付费请求不得作为“已完成”证据。
+
 ## Worktree 与合并规则
 
 建议 Worktree 目录：`../open-ai-canvas-worktrees/canvas-render`、`canvas-state`、`canvas-ecommerce`、`canvas-qa`。

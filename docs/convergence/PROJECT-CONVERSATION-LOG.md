@@ -177,6 +177,29 @@ codex/canvas/qa
 
 合并顺序：先合并低冲突的 lib 和 components，再合并状态恢复，再合并电商域和 Skill，之后合并 QA 文档与测试，最后由集成负责人处理共享热点、路由接线、样式和总测试。
 
+### 7.1 账号交接后的 Agent 重建判定
+
+交接只保证 Git 仓库、提交、分支和 Worktree 可继续使用，不保证上一个账号的 Agent 会话仍然存在。因此接手者先读取 `git worktree list --porcelain`、`git status --short --branch`、当前 `HEAD` 和各 Worker 的最近提交，再决定是否派发新 Agent：
+
+1. 已有分支/Worktree 且 ownership 和改动责任清楚：继续沿用，不重复建立同范围 Agent。
+2. 只有分支或 Worktree 缺失、脱离当前基线、明确废弃，或原任务已完成并保存结果时，才重建该 Agent。
+3. 有未提交改动时先保留并审查，禁止用 `reset`、`clean`、覆盖或强制 checkout“清理”现场。
+4. 无法确认旧会话是否活跃时，保留代码状态，暂不重复派发；由主控在任务记录中标记待确认。
+
+### 7.2 主控任务拆分、依赖和汇报合同
+
+每次开发开始前，主控 Agent 必须在任务记录中列出 3–5 个可独立验收的子任务（不足 3 个不强行拆分），并为每个任务写明目标、ownership 文件/目录、输入合同、输出产物和验收标准。先冻结共享类型、接口、Schema、迁移或核心抽象，再并行启动不重叠的 Worker；合并顺序按依赖关系确定。
+
+Worker 只修改自己的 Worktree 和 ownership，不调用真实 Provider，不写入 API Key；主控负责检查 diff、合并提交、处理共享热点和统一回归。每个子任务完成后报告 Agent/任务、状态、commit、修改文件、focused 验证、风险和是否越过 ownership。主控最终报告必须包括完成的功能、各 Agent 产出、修改文件，以及 `typecheck`、`lint`、`tests`、`build` 的命令/结果；没有脚本或环境不可用要明确写 `NOT AVAILABLE/BLOCKED`，不能冒充通过。
+
+推荐的任务记录格式：
+
+```text
+【任务拆分】Agent A/B/C…：目标 | ownership | 输入 | 输出 | 验收
+【依赖关系】可并行：…；必须等待：…；集成顺序：…
+【最终汇报】功能 | Agent 产出 | 修改文件 | typecheck/lint/tests/build | 问题 | 风险
+```
+
 ## 8. 实施里程碑
 
 ### 已完成的基础收敛
