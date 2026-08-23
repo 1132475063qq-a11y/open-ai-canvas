@@ -167,6 +167,82 @@ export type EcommerceProviderRoute = {
     blockers: string[];
 };
 
+/**
+ * Provider-neutral Ecommerce Agent Runtime registry metadata returned with a
+ * workspace.  The catalog is intentionally read-only: it describes the
+ * versioned routing contract, but does not expose agent instructions or
+ * provider credentials.
+ */
+export type EcommerceAgentRuntimeRegistrySummary = {
+    id: string;
+    version: string;
+    domain: string;
+    sourceDigest: string;
+    agentCount: number;
+    skillCount: number;
+    intentRouteCount: number;
+    handoffRouteCount: number;
+};
+
+export type EcommerceAgentRuntimeAgent = {
+    id: string;
+    description: string;
+    skillIds: string[];
+    sandboxMode?: string;
+};
+
+export type EcommerceAgentRuntimeSkill = {
+    id: string;
+    version: string;
+    description: string;
+    ownerAgentIds: string[];
+};
+
+export type EcommerceAgentRuntimeIntentRoute = {
+    id: string;
+    name: string;
+    triggerPhrases: string[];
+    primaryAgentId: string;
+    candidateAgentIds?: string[];
+    skillIds: string[];
+    stepOutputArtifactTypes?: string[][];
+    requiredInputArtifactTypes: string[];
+    optionalInputArtifactTypes: string[];
+    outputArtifactTypes: string[];
+    requiresDisambiguation?: boolean;
+};
+
+export type EcommerceAgentRuntimeHandoffRoute = {
+    id: string;
+    name: string;
+    fromAgentIds: string[];
+    toAgentIds: string[];
+    skillIds: string[];
+    inputArtifactTypes: string[];
+    requiredInputArtifactGroups?: string[][];
+    inputResolutionMode: string;
+    outputArtifactTypes: string[];
+    messageType: string;
+    executionMode: string;
+    requiresLockedInput: boolean;
+    fanout: string;
+};
+
+export type EcommerceAgentRuntimeArtifactType = {
+    id: string;
+    domain: string;
+    responsible: string;
+};
+
+export type EcommerceAgentRuntimeCatalog = {
+    registry: EcommerceAgentRuntimeRegistrySummary;
+    agents: EcommerceAgentRuntimeAgent[];
+    skills: EcommerceAgentRuntimeSkill[];
+    intentRoutes: EcommerceAgentRuntimeIntentRoute[];
+    handoffRoutes: EcommerceAgentRuntimeHandoffRoute[];
+    artifactTypes: EcommerceAgentRuntimeArtifactType[];
+};
+
 export type EcommerceQuote = {
     fingerprint: string;
     expiresAt: string;
@@ -342,6 +418,8 @@ export type EcommerceWorkspace = {
     schemaVersion: number;
     artifacts: EcommerceArtifact[];
     presets: EcommercePresetCatalog;
+    /** Absent (or null) on workspaces produced before the catalog was added. */
+    agentRuntime?: EcommerceAgentRuntimeCatalog | null;
     providerRoutes: EcommerceProviderRoute[];
     runs: EcommerceProductionRun[];
     activeRun?: EcommerceRunView;
