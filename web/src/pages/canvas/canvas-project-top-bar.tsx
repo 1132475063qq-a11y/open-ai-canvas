@@ -41,6 +41,7 @@ type CanvasTopBarProps = {
     onMediaPerformanceModeChange: (mode: CanvasMediaPerformanceMode) => void;
     onOpenSearch: () => void;
     projectContext?: CanvasContextSummary & { projectId: string; projectName: string; projectType?: string };
+    onOpenEcommerce?: () => void;
     onEnterFocusMode: () => void;
     shortDramaGuide?: { progress: CanvasShortDramaProgress; collapsed: boolean; onToggle: () => void };
 };
@@ -73,6 +74,7 @@ export function CanvasTopBar({
     onMediaPerformanceModeChange,
     onOpenSearch,
     projectContext,
+    onOpenEcommerce,
     onEnterFocusMode,
     shortDramaGuide,
 }: CanvasTopBarProps) {
@@ -224,6 +226,16 @@ export function CanvasTopBar({
                     >
                         <Button type="text" className="!hidden !h-10 !w-10 !min-w-10 !rounded-xl !p-0 lg:!inline-flex" style={{ color: theme.node.text }} icon={<Gauge className="size-4" />} aria-label="媒体性能模式" title="媒体性能模式" />
                     </Dropdown>
+                    {projectContext?.projectType === "ecommerce" && onOpenEcommerce ? (
+                        <Button
+                            type="primary"
+                            className="!h-10 !rounded-xl !px-3 !font-medium"
+                            icon={<Sparkles className="size-4" />}
+                            onClick={onOpenEcommerce}
+                        >
+                            AI 商拍
+                        </Button>
+                    ) : null}
                     {compactAgentStatus ? <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} /> : null}
                     {user && creditsEnabled ? (
                         <Link

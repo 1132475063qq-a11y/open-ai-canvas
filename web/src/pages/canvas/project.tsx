@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useParams, useSearchParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { uploadMediaFile } from "@/services/file-storage";
 import { readLocalRuntimeBootstrapState } from "@/services/local-runtime-bootstrap";
@@ -30,6 +30,7 @@ import { CanvasActiveTaskPanel } from "@/components/canvas/canvas-active-task-pa
 import { FilmProductionPanel } from "@/components/canvas/film-production-panel";
 import { EcommerceNodeCard } from "@/ecommerce/nodes/ecommerce-node-card";
 import { createEcommerceCanvasProjection, reconcileEcommerceCanvasProjection, shouldFitEcommerceProductionFrame } from "@/ecommerce/canvas/ecommerce-canvas-projection";
+import { ecommerceWorkspaceSelectionFromNodes, ecommerceWorkspaceSelectionSearchParams } from "@/ecommerce/canvas/ecommerce-workspace-entry";
 import { ECOMMERCE_PROJECT_TYPE } from "@/ecommerce/domain/types";
 import { CanvasAssetTray } from "@/components/canvas/canvas-asset-tray";
 import { CanvasProjectSidebar } from "@/components/canvas/canvas-project-sidebar";
@@ -164,6 +165,7 @@ export default function CanvasPage() {
 
 function InfiniteCanvasPage() {
     const { message } = App.useApp();
+    const navigate = useNavigate();
     const params = useParams<{ id: string }>();
     const [searchParams, setSearchParams] = useSearchParams();
     const projectId = params.id || "";
@@ -412,6 +414,18 @@ function InfiniteCanvasPage() {
     const linkedProjectQuery = useQuery({ queryKey: ["project", linkedProjectId], queryFn: () => getProject(linkedProjectId), enabled: Boolean(linkedProjectId) });
     const filmWorkspace = isFilmWorkspace({ featureEnabled: shortDramaEnabled, projectId: linkedProjectId, projectType: linkedProjectQuery.data?.project.type });
     const isEcommerceProject = linkedProjectQuery.data?.project.type === ECOMMERCE_PROJECT_TYPE;
+    const ecommerceWorkspaceSelection = useMemo(() => {
+        if (!isEcommerceProject || !linkedProjectQuery.data) return null;
+        const selectedNodes = nodes.filter((node) => selectedNodeIds.has(node.id));
+        return ecommerceWorkspaceSelectionFromNodes(selectedNodes, linkedProjectQuery.data.assets);
+    }, [isEcommerceProject, linkedProjectQuery.data, nodes, selectedNodeIds]);
+    const openEcommerceWorkspace = useCallback(() => {
+        if (!linkedProjectId || !isEcommerceProject) return;
+        const params = ecommerceWorkspaceSelection ? ecommerceWorkspaceSelectionSearchParams(ecommerceWorkspaceSelection) : new URLSearchParams();
+        params.set("intent", "ai-shoot");
+        params.set("entryId", nanoid());
+        navigate(`/projects/${linkedProjectId}/ecommerce?${params.toString()}`);
+    }, [ecommerceWorkspaceSelection, isEcommerceProject, linkedProjectId, navigate]);
     const ecommerceWorkspaceQuery = useQuery({
         queryKey: ["ecommerce-workspace", linkedProjectId],
         queryFn: () => getProjectEcommerceWorkspace(linkedProjectId),
@@ -1635,7 +1649,7 @@ function InfiniteCanvasPage() {
 
     const renderCanvasNodeContent = useCallback(
         (contentNode: CanvasNodeData) => {
-            if (contentNode.ecommerceKind) return <EcommerceNodeCard node={contentNode} />;
+            if (contentNode.ecommerceKind) return <EcommerceNodeCard node={contentNode} onOpenWorkspace={isEcommerceProject ? openEcommerceWorkspace : undefined} />;
             if (contentNode.metadata?.workflowKind === "character" && contentNode.metadata.characterAssetId) {
                 return <CanvasCharacterReferenceNodeContent node={contentNode} />;
             }
@@ -1730,8 +1744,10 @@ function InfiniteCanvasPage() {
             handleConnectStart,
             handleGenerateNode,
             handleNodeResize,
+            isEcommerceProject,
             mentionReferencesByNodeId,
             mergeVideosByIds,
+            openEcommerceWorkspace,
             openDirectorWorkbench,
             openStoryInput,
             removeScriptRow,
@@ -1879,6 +1895,7 @@ function InfiniteCanvasPage() {
                                       }
                                     : undefined
                             }
+                            onOpenEcommerce={isEcommerceProject ? openEcommerceWorkspace : undefined}
                             onEnterFocusMode={enterFocusMode}
                             shortDramaGuide={shortDramaGuide}
                         />

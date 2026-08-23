@@ -1,4 +1,4 @@
-import { AlertTriangle, Boxes, CheckCircle2, Film, Image, Layers3, LoaderCircle, PackageSearch, ScanSearch, Sparkles, UserRound, WandSparkles } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Boxes, CheckCircle2, Film, Image, Layers3, LoaderCircle, PackageSearch, ScanSearch, Sparkles, UserRound, WandSparkles } from "lucide-react";
 
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
@@ -25,8 +25,10 @@ const labels: Record<string, string> = {
     needs_you: "NEEDS YOU",
 };
 
-export function EcommerceNodeCard({ node }: { node: CanvasNodeData }) {
+export function EcommerceNodeCard({ node, onOpenWorkspace }: { node: CanvasNodeData; onOpenWorkspace?: () => void }) {
+    if (node.ecommerceKind === "production_frame") return <ProductionFrameCard node={node} onOpenWorkspace={onOpenWorkspace} />;
     if (node.ecommerceKind === "generated_asset") return <GeneratedAssetCard node={node} />;
+    if (node.type === CanvasNodeType.Image && node.metadata?.content) return <EcommerceAssetCard node={node} />;
     if (node.ecommerceKind === "video_sequence") return <VideoSequenceCard node={node} />;
     const state = node.ecommerceState;
     const Icon = node.ecommerceKind === "product_input" || node.ecommerceKind === "product_dna"
@@ -60,6 +62,57 @@ export function EcommerceNodeCard({ node }: { node: CanvasNodeData }) {
                 <span>{node.ecommerceRef?.artifactRevision ? `v${node.ecommerceRef.artifactRevision}` : state?.lifecycle || "draft"}</span>
                 <span>{state?.production || "not_started"}</span>
             </div>
+        </div>
+    );
+}
+
+function EcommerceAssetCard({ node }: { node: CanvasNodeData }) {
+    return (
+        <div className="relative h-full w-full overflow-hidden bg-foreground/[.035]">
+            <img src={node.metadata?.content} alt={node.title} className="h-full w-full object-cover" loading="lazy" decoding="async" draggable={false} />
+            <div className="absolute inset-x-2 bottom-2 flex min-w-0 items-center gap-1.5 rounded bg-black/65 px-2 py-1 text-[var(--fs-micro)] text-white">
+                <span className="shrink-0 rounded bg-white/15 px-1.5 py-0.5">输入</span>
+                <span className="truncate">{node.title}</span>
+            </div>
+        </div>
+    );
+}
+
+function ProductionFrameCard({ node, onOpenWorkspace }: { node: CanvasNodeData; onOpenWorkspace?: () => void }) {
+    const frame = node.metadata?.ecommerceFrame;
+    const progress = Math.max(0, Math.min(100, frame?.progress || 0));
+    const status = frame?.statusLabel || "等待创建系列";
+    return (
+        <div className="flex h-full w-full flex-col overflow-hidden p-4">
+            <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 text-[var(--fs-tiny)] font-semibold text-foreground/50">
+                        <Sparkles className="size-3.5" /> AI 商拍
+                    </div>
+                    <div className="mt-1 truncate text-base font-semibold text-foreground/90" title={node.title}>{node.title}</div>
+                </div>
+                <span className="shrink-0 rounded-full bg-foreground/[.06] px-2 py-1 text-[var(--fs-micro)] font-medium text-foreground/60">{status}</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[var(--fs-caption)] text-foreground/58">
+                <span className="truncate" title={frame?.inputLabel}>{frame?.inputLabel || "等待商品素材"}</span>
+                <span className="truncate text-right" title={frame?.presetLabel}>{frame?.presetLabel || "选择商拍预设"}</span>
+                <span>结果 {frame?.resultCount || 0}/{frame?.totalCount || 6}</span>
+                <span className="text-right">已接受 {frame?.acceptedCount || 0}</span>
+            </div>
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-foreground/10" aria-label={`生产进度 ${progress}%`}>
+                <div className="h-full rounded-full bg-emerald-500 transition-[width]" style={{ width: `${progress}%` }} />
+            </div>
+            <button
+                type="button"
+                className="mt-auto inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-foreground px-3 text-xs font-semibold text-background transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenWorkspace?.();
+                }}
+                disabled={!onOpenWorkspace}
+            >
+                打开商拍工作台 <ArrowUpRight className="size-3.5" />
+            </button>
         </div>
     );
 }

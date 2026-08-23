@@ -54,6 +54,40 @@ func TestEcommerceSkillPromptCarriesCameraAndDiversityRules(t *testing.T) {
 	}
 }
 
+func TestEcommerceGoldenPresetsExposeVersionedSixShotSkills(t *testing.T) {
+	wanted := map[string]string{
+		"model.top-wear":            "model-interaction.top-wear@1",
+		"still.lifestyle-tabletop": "still-life.lifestyle-tabletop@1",
+	}
+	found := map[string]bool{}
+	for _, preset := range systemEcommercePresets() {
+		expectedSkillRef, golden := wanted[preset.ID]
+		if !golden {
+			continue
+		}
+		found[preset.ID] = true
+		if preset.Definition.SkillRef != expectedSkillRef {
+			t.Fatalf("preset %s skillRef = %q, want %q", preset.ID, preset.Definition.SkillRef, expectedSkillRef)
+		}
+		roles := expandEcommerceShotRoles(preset.Definition.ShotRoles, 6)
+		if len(roles) != 6 {
+			t.Fatalf("preset %s produced %d roles, want 6", preset.ID, len(roles))
+		}
+		keys := make(map[string]struct{}, len(roles))
+		for _, role := range roles {
+			if _, duplicate := keys[role.Key]; duplicate {
+				t.Fatalf("preset %s repeated role %q", preset.ID, role.Key)
+			}
+			keys[role.Key] = struct{}{}
+		}
+	}
+	for presetID := range wanted {
+		if !found[presetID] {
+			t.Fatalf("golden preset %s is missing", presetID)
+		}
+	}
+}
+
 func modelRunFixtureForPrompt() model.EcommerceProductionRun {
 	return model.EcommerceProductionRun{
 		OutputCount:   6,

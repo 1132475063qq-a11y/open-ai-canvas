@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App, Button, Checkbox, Input, InputNumber, Progress, Select, Skeleton, Switch, Tag, Tooltip } from "antd";
-import { Bot, Boxes, Check, ChevronDown, CircleAlert, Coins, Copy, Database, Image as ImageIcon, Layers3, LoaderCircle, Package, RefreshCw, ScanSearch, Settings2, Sparkles, StopCircle, UserRound, WandSparkles } from "lucide-react";
+import { Bot, Boxes, Check, ChevronDown, CircleAlert, Coins, Copy, Database, Film, Image as ImageIcon, Layers3, LoaderCircle, Package, RefreshCw, ScanSearch, Settings2, Sparkles, StopCircle, UserRound, WandSparkles } from "lucide-react";
+import { useSearchParams } from "react-router";
 
 import { AssetMediaPreview } from "@/components/asset-media-preview";
+import { ecommerceWorkspaceSelectionFromSearchParams, mergeEcommerceWorkspaceAssetSelection } from "@/ecommerce/canvas/ecommerce-workspace-entry";
 import {
     approveProjectEcommerceRun,
     cancelProjectEcommerceRun,
@@ -49,6 +51,7 @@ const activeAgentArtifacts = [
     { type: "creative_direction", label: "视觉方向", agent: "CreativeDirectorAgent", icon: WandSparkles },
     { type: "scene_pack", label: "场景导演", agent: "SceneDirectorAgent", icon: Layers3 },
     { type: "generation_request", label: "执行编译", agent: "EcommerceOrchestrator", icon: Bot },
+    { type: "motion_plan", label: "视频编排", agent: "MotionDirectorAgent", icon: Film },
 ] as const;
 
 const defaultUserGoal = "呈现真实生活状态中的商品价值，并形成可直接筛选投放的系列套图";
@@ -69,6 +72,7 @@ function ecommerceFactString(value: unknown) {
 export function EcommerceProductionWorkspace({ detail, refreshProject, onCreateCanvas }: Props) {
     const { message, modal } = App.useApp();
     const queryClient = useQueryClient();
+    const [searchParams] = useSearchParams();
     const personalAssets = useAssetStore((state) => state.assets);
     const projectId = detail.project.id;
     const workspaceQuery = useQuery({
@@ -82,12 +86,22 @@ export function EcommerceProductionWorkspace({ detail, refreshProject, onCreateC
     const [selectedRunId, setSelectedRunId] = useState("");
     const [busyKey, setBusyKey] = useState("");
     const hydratedRunKeyRef = useRef("");
+    const plannedCanvasEntryRef = useRef("");
+    const hydratedCanvasEntryAssetsRef = useRef("");
 
-    const imageAssets = detail.assets.filter((asset) => asset.mediaType === "image");
+    const imageAssets = useMemo(() => detail.assets.filter((asset) => asset.mediaType === "image"), [detail.assets]);
     const audioAssets = detail.assets.filter((asset) => asset.mediaType === "audio");
     const assetOptions = imageAssets.map((asset) => ({ value: asset.id, label: asset.title || asset.id }));
     const audioOptions = audioAssets.map((asset) => ({ value: asset.id, label: asset.title || asset.id }));
-    const initialAssetSelection = ecommerceAssetSelectionDefaults(detail.assets);
+    const searchParamsKey = searchParams.toString();
+    const canvasEntryId = searchParams.get("intent") === "ai-shoot" ? searchParams.get("entryId")?.trim() || "" : "";
+    const canvasAssetSelection = useMemo(
+        () => ecommerceWorkspaceSelectionFromSearchParams(new URLSearchParams(searchParamsKey), new Set(imageAssets.map((asset) => asset.id))),
+        [imageAssets, searchParamsKey],
+    );
+    const hasCanvasAssetSelection = Object.keys(canvasAssetSelection).length > 0;
+    const hasCanvasEntryIntent = Boolean(canvasEntryId);
+    const initialAssetSelection = mergeEcommerceWorkspaceAssetSelection(ecommerceAssetSelectionDefaults(detail.assets), canvasAssetSelection);
     const [productAssetIds, setProductAssetIds] = useState<string[]>(() => initialAssetSelection.productAssetIds);
     const [supportingAssetIds, setSupportingAssetIds] = useState<string[]>(() => initialAssetSelection.supportingAssetIds);
     const [modelAssetIds, setModelAssetIds] = useState<string[]>(() => initialAssetSelection.modelAssetIds);
@@ -131,12 +145,26 @@ export function EcommerceProductionWorkspace({ detail, refreshProject, onCreateC
 
     useEffect(() => {
         const active = workspace?.activeRun;
-        if (!active) return;
+        if (!active || (hasCanvasEntryIntent && !selectedRunId)) return;
         if (!selectedRunId || selectedRunId === active.run.id) {
             setSelectedRunId(active.run.id);
             setRunView(active);
         }
-    }, [workspace?.activeRun?.run.id, workspace?.activeRun?.run.updatedAt, selectedRunId]);
+    }, [hasCanvasEntryIntent, workspace?.activeRun?.run.id, workspace?.activeRun?.run.updatedAt, selectedRunId]);
+
+    useEffect(() => {
+        if (!canvasEntryId || hydratedCanvasEntryAssetsRef.current === canvasEntryId) return;
+        const run = workspace?.activeRun?.run;
+        if (!run) return;
+        const availableIds = new Set(imageAssets.map((asset) => asset.id));
+        const recover = (raw: string) => parseJSONArray(raw).filter((assetId) => availableIds.has(assetId));
+        if (!canvasAssetSelection.productAssetIds && !productAssetIds.length) setProductAssetIds(recover(run.productAssetIdsJson));
+        if (!canvasAssetSelection.supportingAssetIds && !supportingAssetIds.length) setSupportingAssetIds(recover(run.supportingAssetIdsJson));
+        if (!canvasAssetSelection.modelAssetIds && !modelAssetIds.length) setModelAssetIds(recover(run.modelAssetIdsJson));
+        if (!canvasAssetSelection.sceneAssetIds && !sceneAssetIds.length) setSceneAssetIds(recover(run.sceneAssetIdsJson));
+        if (!canvasAssetSelection.brandAssetIds && !brandAssetIds.length) setBrandAssetIds(recover(run.brandAssetIdsJson));
+        hydratedCanvasEntryAssetsRef.current = canvasEntryId;
+    }, [canvasAssetSelection, canvasEntryId, imageAssets, productAssetIds.length, supportingAssetIds.length, modelAssetIds.length, sceneAssetIds.length, brandAssetIds.length, workspace?.activeRun?.run]);
 
     // A workspace refresh restores the server-owned Run, but the editor state is
     // local React state. Hydrate once per selected Run so polling never erases
@@ -205,21 +233,21 @@ export function EcommerceProductionWorkspace({ detail, refreshProject, onCreateC
         }
     };
 
-    const createRun = async () => {
+    const createRun = async (idempotencyKey = createIdempotencyKey(projectId)) => {
         if (!productAssetIds.length) {
             message.warning("至少选择一张主商品图片");
-            return;
+            return false;
         }
         if (!selectedPreset) {
             message.warning("请选择商拍预设");
-            return;
+            return false;
         }
         const route = splitRouteKey(selectedRoute);
         const facts = Object.fromEntries(Object.entries({ color: productColor.trim(), material: productMaterial.trim(), mustPreserve: mustPreserve.trim() }).filter(([, value]) => value));
         setBusyKey("create-run");
         try {
             const result = await createProjectEcommerceRun(projectId, {
-                idempotencyKey: createIdempotencyKey(projectId),
+                idempotencyKey,
                 productAssetIds,
                 supportingAssetIds,
                 modelAssetIds: selectedPreset.kernel === "MODEL_INTERACTION" ? modelAssetIds : [],
@@ -244,12 +272,24 @@ export function EcommerceProductionWorkspace({ detail, refreshProject, onCreateC
             });
             applyRun(result.run);
             message.success(reviewBeforeGeneration ? "Agent 方案已生成，等待确认" : result.run.quote ? "Agent 方案与费用报价已生成" : "Agent 方案已生成，请配置可用图片模型");
+            return true;
         } catch (error) {
             message.error(error instanceof Error ? error.message : "系列方案创建失败");
+            return false;
         } finally {
             setBusyKey("");
         }
     };
+
+    useEffect(() => {
+        if (!canvasEntryId || plannedCanvasEntryRef.current === canvasEntryId || !workspace || !selectedPreset || !productAssetIds.length) return;
+        if (readyRoutes.length > 0 && !selectedRoute) return;
+        if (detail.project.status === "archived") return;
+        plannedCanvasEntryRef.current = canvasEntryId;
+        void createRun(`ecommerce:${projectId}:canvas:${canvasEntryId}`).then((created) => {
+            if (!created) plannedCanvasEntryRef.current = "";
+        });
+    }, [canvasEntryId, detail.project.status, productAssetIds.length, projectId, readyRoutes.length, selectedPreset, selectedRoute, workspace]);
 
     const approvePlan = async () => {
         if (!runView) return;
@@ -334,17 +374,18 @@ export function EcommerceProductionWorkspace({ detail, refreshProject, onCreateC
     return (
         <div className="space-y-6">
             <header className="flex flex-col gap-3 border-b border-border/70 pb-4 lg:flex-row lg:items-end lg:justify-between">
-                <div className="min-w-0"><div className="flex items-center gap-2 text-xs font-semibold text-[var(--workspace-accent)]"><Boxes className="size-3.5" />ECOMMERCE PRODUCTION</div><h2 className="mt-1 text-xl font-semibold">电商创意工作台</h2><div className="mt-2 flex flex-wrap items-center gap-2"><Tag className="m-0 !rounded-md">双内核</Tag><Tag className="m-0 !rounded-md">6 张默认套图</Tag><Tag className="m-0 !rounded-md">4K 默认</Tag><Tag className="m-0 !rounded-md">人工 QA</Tag></div></div>
+                <div className="min-w-0"><div className="flex items-center gap-2 text-xs font-semibold text-[var(--workspace-accent)]"><Boxes className="size-3.5" />ECOMMERCE PRODUCTION</div><h2 className="mt-1 text-xl font-semibold">电商创意工作台</h2><div className="mt-2 flex flex-wrap items-center gap-2"><Tag className="m-0 !rounded-md">双内核</Tag><Tag className="m-0 !rounded-md">6 张默认套图</Tag><Tag className="m-0 !rounded-md">4K 默认</Tag><Tag className="m-0 !rounded-md">人工 QA</Tag>{hasCanvasAssetSelection ? <Tag color="success" className="m-0 !rounded-md">画布素材已带入</Tag> : null}{hasCanvasEntryIntent ? <Tag color="processing" className="m-0 !rounded-md">Agent 自动规划</Tag> : null}</div></div>
                 <div className="flex w-full min-w-0 items-center gap-2 lg:w-auto"><Select className="min-w-0 flex-1 lg:w-72" allowClear value={selectedRunId || undefined} options={workspace.runs.map((run) => ({ value: run.id, label: `${new Date(run.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} · ${ecommerceRunStatusLabel(run.status)}` }))} placeholder="历史生产记录" onChange={(value) => value ? void loadRun(value) : (setSelectedRunId(""), setRunView(undefined))} /><Tooltip title="刷新运行状态"><Button icon={<RefreshCw className={`size-4 ${workspaceQuery.isFetching ? "animate-spin" : ""}`} />} aria-label="刷新运行状态" onClick={() => void workspaceQuery.refetch()} /></Tooltip></div>
             </header>
 
             <section aria-labelledby="ecommerce-config-title">
-                <div className="grid gap-3 xl:grid-cols-[minmax(210px,1.25fr)_minmax(180px,1fr)_120px_104px_170px_auto] xl:items-end">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,1.35fr)_minmax(180px,1fr)_120px_96px_154px_112px_auto] xl:items-end">
                     <label className="grid gap-1.5 text-xs"><span id="ecommerce-config-title" className="font-medium text-foreground/65">商拍预设</span><div className="flex gap-1.5"><Select className="min-w-0 flex-1" showSearch value={presetId || undefined} optionFilterProp="label" options={presetOptions(presets)} onChange={(value) => { const next = presets.find((preset) => preset.id === value); setPresetId(value); if (next) setCategory(next.category || "general"); }} /><Tooltip title={selectedPreset?.system ? "复制并编辑预设" : "编辑为新版本"}><Button icon={<Copy className="size-4" />} aria-label="编辑预设" disabled={!selectedPreset} onClick={() => setPresetEditorOpen(true)} /></Tooltip></div></label>
                     <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/65">图片模型</span><Select value={selectedRoute || undefined} placeholder={readyRoutes.length ? "选择图片模型" : "没有可用模型"} options={readyRoutes.map((route) => ({ value: routeKey(route.channelId, route.model), label: `${route.channelName} · ${route.modelDisplayName}` }))} onChange={setSelectedRoute} /></label>
                     <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/65">渠道</span><Select value={targetChannel} options={ecommerceChannelOptions} onChange={setTargetChannel} /></label>
                     <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/65">比例</span><Select value={aspectRatio} options={ecommerceAspectOptions} onChange={setAspectRatio} /></label>
                     <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/65">分辨率</span><Select value={resolution} options={resolutionOptions} onChange={setResolution} /></label>
+                    <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/65">输出数量</span><InputNumber className="w-full" min={1} max={12} value={outputCount} addonAfter="张" onChange={(value) => setOutputCount(Math.min(12, Math.max(1, value || 6)))} /></label>
                     <Button type="primary" className="!h-8 xl:!h-[32px]" icon={busyKey === "create-run" ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />} loading={busyKey === "create-run"} disabled={archived || !productAssetIds.length || !selectedPreset} onClick={() => void createRun()}>生成系列套图</Button>
                 </div>
 
@@ -358,15 +399,11 @@ export function EcommerceProductionWorkspace({ detail, refreshProject, onCreateC
 
                 {productAssetIds.length ? <div className="mt-3 flex gap-2 overflow-x-auto pb-1">{productAssetIds.map((assetId, index) => { const asset = detail.assets.find((item) => item.id === assetId); const personal = personalAssets.find((item) => item.id === assetId); return <div key={assetId} className="relative h-16 w-20 shrink-0 overflow-hidden rounded-md border border-border/70 bg-foreground/[.04]"><AssetMediaPreview asset={personal} alt={asset?.title || "商品参考"} className="h-full w-full object-cover" fallback={<div className="grid h-full place-items-center"><ImageIcon className="size-5 text-foreground/25" /></div>} /><span className="absolute left-1 top-1 rounded bg-black/65 px-1 text-[10px] text-white">{index === 0 ? "主" : index + 1}</span></div>; })}</div> : null}
 
-                <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1.5fr)_160px_180px] lg:items-end">
-                    <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/65">本次目标</span><Input value={userGoal} maxLength={500} onChange={(event) => setUserGoal(event.target.value)} /></label>
-                    <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/65">商品品类</span><Select value={category} options={ecommerceCategoryOptions} onChange={setCategory} /></label>
-                    <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/65">输出数量</span><InputNumber className="w-full" min={1} max={12} value={outputCount} addonAfter="张" onChange={(value) => setOutputCount(Math.min(12, Math.max(1, value || 6)))} /></label>
-                </div>
-
                 <details className="group mt-4 border-t border-border/65 pt-3">
                     <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium"><span className="flex items-center gap-2"><Settings2 className="size-4 text-foreground/48" />高级设置</span><ChevronDown className="size-4 text-foreground/40 transition-transform group-open:rotate-180" /></summary>
                     <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        <label className="grid gap-1.5 text-xs sm:col-span-2"><span className="font-medium text-foreground/60">本次目标</span><Input value={userGoal} maxLength={500} onChange={(event) => setUserGoal(event.target.value)} /></label>
+                        <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/60">商品品类</span><Select value={category} options={ecommerceCategoryOptions} onChange={setCategory} /></label>
                         <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/60">商品颜色事实</span><Input value={productColor} onChange={(event) => setProductColor(event.target.value)} placeholder="只填写已确认颜色" /></label>
                         <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/60">商品材质事实</span><Input value={productMaterial} onChange={(event) => setProductMaterial(event.target.value)} placeholder="只填写已确认材质" /></label>
                         <label className="grid gap-1.5 text-xs"><span className="font-medium text-foreground/60">必须保留信息</span><Input value={mustPreserve} onChange={(event) => setMustPreserve(event.target.value)} placeholder="结构、Logo 位置、包装文字" /></label>
@@ -416,7 +453,7 @@ function AgentPlan({ artifacts, runView }: { artifacts: EcommerceArtifact[]; run
     const scenePack = parseJSONObject(latestRunArtifact(artifacts, runView.run.id, "scene_pack")?.payloadJson);
     const modelProfile = parseJSONObject(latestRunArtifact(artifacts, runView.run.id, "model_profile")?.payloadJson);
     return <div className="mt-4">
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{runArtifacts.map(({ type, label, agent, icon: Icon, artifact }) => <div key={type} className="flex min-h-16 items-center gap-3 rounded-lg border border-border/70 px-3 py-2"><span className={`grid size-8 shrink-0 place-items-center rounded-md ${artifact ? "bg-emerald-500/10 text-emerald-600" : "bg-foreground/[.05] text-foreground/35"}`}>{artifact ? <Check className="size-4" /> : <Icon className="size-4" />}</span><div className="min-w-0"><div className="truncate text-sm font-medium">{label}</div><div className="truncate text-[11px] text-foreground/43">{agent}{artifact ? ` · r${artifact.revision}` : ""}</div></div></div>)}</div>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">{runArtifacts.map(({ type, label, agent, icon: Icon, artifact }) => <div key={type} className="flex min-h-16 items-center gap-3 rounded-lg border border-border/70 px-3 py-2"><span className={`grid size-8 shrink-0 place-items-center rounded-md ${artifact ? "bg-emerald-500/10 text-emerald-600" : "bg-foreground/[.05] text-foreground/35"}`}>{artifact ? <Check className="size-4" /> : <Icon className="size-4" />}</span><div className="min-w-0"><div className="truncate text-sm font-medium">{label}</div><div className="truncate text-[11px] text-foreground/43">{agent}{artifact ? ` · r${artifact.revision}` : ""}</div></div></div>)}</div>
         <details className="group mt-3 border-t border-border/60 pt-3"><summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium"><span className="flex items-center gap-2"><Database className="size-4 text-foreground/45" />展开生产方案与逐镜 Prompt</span><ChevronDown className="size-4 text-foreground/40 transition-transform group-open:rotate-180" /></summary><div className="mt-4 grid gap-4 xl:grid-cols-3"><PlanFact title="ProductDNA" icon={<Package className="size-4" />} rows={[factRow("品类", productDNA.category), factRow("事实", productDNA.recordedFacts), factRow("保真", productDNA.mustPreserve)]} /><PlanFact title="Model Profile" icon={<UserRound className="size-4" />} rows={[factRow("模式", modelProfile.mode || runView.run.modelMode), factRow("状态", modelProfile.status), factRow("要求", modelProfile.brief || runView.run.modelBrief)]} /><PlanFact title="Scene Pack" icon={<Layers3 className="size-4" />} rows={[factRow("场景", scenePack.brief || runView.run.sceneBrief), factRow("光线", scenePack.lighting), factRow("色彩", scenePack.palette)]} /></div><div className="mt-4 divide-y divide-border/60 border-y border-border/60">{runView.slots.map(({ slot }) => <details key={slot.id} className="py-2"><summary className="grid cursor-pointer grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-2 text-sm"><span className="grid size-6 place-items-center rounded bg-foreground/[.055] text-xs tabular-nums">{slot.position}</span><span className="truncate font-medium">{slot.title}</span><span className="text-xs text-foreground/42">{slot.role}</span></summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-foreground/[.035] p-3 font-sans text-xs leading-5 text-foreground/58">{slot.prompt}</pre></details>)}</div></details>
     </div>;
 }

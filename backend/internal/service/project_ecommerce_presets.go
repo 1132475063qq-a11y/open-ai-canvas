@@ -280,7 +280,7 @@ func systemEcommercePresets() []EcommercePreset {
 	result := make([]EcommercePreset, 0, len(items))
 	for _, item := range items {
 		definition := EcommercePresetDefinition{
-			SchemaVersion: EcommercePresetSchemaVersion, SkillRef: "ecommerce.skill." + item.id,
+			SchemaVersion: EcommercePresetSchemaVersion, SkillRef: ecommerceSkillRefForPreset(item.id),
 			Kernel: item.kernel, SupportedCategories: item.categories, SceneTemplate: item.scene,
 			InteractionTemplate: item.interaction, ShotRoles: cloneEcommerceShotRoles(item.roles),
 			RequiredConstraints: immutableEcommerceConstraints(),
@@ -290,6 +290,17 @@ func systemEcommercePresets() []EcommercePreset {
 		result = append(result, EcommercePreset{ID: item.id, PresetKey: item.id, Version: 1, Name: item.name, Kernel: item.kernel, Category: item.category, Description: item.description, System: true, Definition: definition, UpdatedAt: now})
 	}
 	return result
+}
+
+func ecommerceSkillRefForPreset(presetID string) string {
+	switch presetID {
+	case "model.top-wear":
+		return "model-interaction.top-wear@1"
+	case "still.lifestyle-tabletop":
+		return "still-life.lifestyle-tabletop@1"
+	default:
+		return "ecommerce.skill." + presetID
+	}
 }
 
 func modelInteractionShotRoles() []EcommercePresetShotRole {

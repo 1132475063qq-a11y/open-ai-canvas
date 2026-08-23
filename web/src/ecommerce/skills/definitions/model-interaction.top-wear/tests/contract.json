@@ -1,0 +1,7 @@
+{
+    "skill_id": "model-interaction.top-wear",
+    "expected_variation_count": 6,
+    "expected_relation_count": 5,
+    "forbidden_duplicate_camera_roles": true,
+    "required_input_roles": ["product_primary", "model_reference", "scene_reference"]
+}

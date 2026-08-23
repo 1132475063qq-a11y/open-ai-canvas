@@ -1,4 +1,5 @@
 {
-    "count": 4,
-    "variation_axis": ["camera", "lighting", "composition", "context"]
+    "count": 6,
+    "roles": ["hero_front", "environment_wide", "side_light", "in_use_context", "overhead_context", "detail_hero"],
+    "variation_axis": ["camera", "distance", "lighting", "composition", "context", "product_feature"]
 }

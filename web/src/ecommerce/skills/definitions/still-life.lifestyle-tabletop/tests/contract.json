@@ -1,5 +1,7 @@
 {
     "skill_id": "still-life.lifestyle-tabletop",
-    "expected_variation_count": 4,
-    "expected_relation_count": 3
+    "expected_variation_count": 6,
+    "expected_relation_count": 3,
+    "forbidden_duplicate_camera_roles": true,
+    "required_input_roles": ["product_primary", "scene_reference"]
 }

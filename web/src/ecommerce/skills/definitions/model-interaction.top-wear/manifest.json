@@ -1,0 +1,11 @@
+{
+    "id": "model-interaction.top-wear",
+    "version": 1,
+    "family": "MODEL_INTERACTION",
+    "mode": "MODEL_INTERACTION",
+    "name": "Top Wear Model Lifestyle",
+    "defaultOutputCount": 6,
+    "supportedAspectRatios": ["9:16", "3:4", "1:1"],
+    "inputRoles": ["product_primary", "product_front", "product_back", "product_detail", "model_reference", "scene_reference"],
+    "immutableConstraints": ["product_fidelity", "identity_safety", "natural_contact", "quote_before_paid_execution"]
+}

@@ -1,0 +1,6 @@
+{
+    "must_preserve": ["garment silhouette", "neckline", "shoulder line", "sleeve length", "closure", "hem", "confirmed logo"],
+    "forbidden_changes": ["invented garment panels", "extra buttons or pockets", "changed print", "deformed hands", "floating fabric", "repeated camera composition"],
+    "text_safe_zones_required": true,
+    "natural_contact_required": true
+}

@@ -2,5 +2,10 @@
     "id": "still-life.lifestyle-tabletop",
     "version": 1,
     "family": "STILL_LIFE",
-    "mode": "STILL_LIFE"
+    "mode": "STILL_LIFE",
+    "name": "Lifestyle Tabletop",
+    "defaultOutputCount": 6,
+    "supportedAspectRatios": ["9:16", "3:4", "1:1"],
+    "inputRoles": ["product_primary", "product_front", "product_back", "product_detail", "product_supporting", "packaging", "scene_reference"],
+    "immutableConstraints": ["product_fidelity", "logo_text_safety", "physical_contact", "quote_before_paid_execution"]
 }

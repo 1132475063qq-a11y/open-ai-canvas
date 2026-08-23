@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { isEcommerceCanvasDocument } from "../src/ecommerce/canvas/ecommerce-canvas-isolation";
 import { createEcommerceCanvasProjection, reconcileEcommerceCanvasProjection } from "../src/ecommerce/canvas/ecommerce-canvas-projection";
+import { ecommerceWorkspaceSelectionFromNodes, ecommerceWorkspaceSelectionFromSearchParams, ecommerceWorkspaceSelectionSearchParams, mergeEcommerceWorkspaceAssetSelection } from "../src/ecommerce/canvas/ecommerce-workspace-entry";
 import { isFilmWorkspace } from "../src/lib/canvas/film-workspace";
 import { ECOMMERCE_PROJECT_SETTING_KEYS, projectDetailDefaultView, projectDetailPath, projectDetailViewKeys, projectHubPath } from "../src/lib/project-domain";
 import type { ProjectDetail } from "../src/services/api/projects";
@@ -51,10 +52,45 @@ function detail(projectType = "ecommerce"): ProjectDetail {
 
 test("ecommerce projection contains only ecommerce nodes and stable connections", () => {
     const projection = createEcommerceCanvasProjection(detail());
-    expect(projection.nodes.length).toBe(18);
+    expect(projection.nodes.length).toBe(9);
     expect(new Set(projection.nodes.map((node) => node.id)).size).toBe(projection.nodes.length);
     expect(projection.nodes.every((node) => node.metadata?.skillDomain === "ecommerce")).toBe(true);
     expect(projection.connections.every((connection) => connection.id.includes(":ecommerce:edge:"))).toBe(true);
+});
+
+test("selected ecommerce asset nodes round-trip into a role-scoped workspace entry", () => {
+    const assets = [
+        ...detail().assets,
+        { ...detail().assets[0], id: "asset-model", projectRole: "model_reference" },
+        { ...detail().assets[0], id: "asset-scene", projectRole: "scene_reference" },
+        { ...detail().assets[0], id: "asset-logo", projectRole: "logo" },
+    ];
+    const selection = ecommerceWorkspaceSelectionFromNodes(
+        [
+            { ecommerceRef: { projectId: "project-ecommerce", assetId: "asset-product" } },
+            { metadata: { assetId: "asset-model" } },
+            { ecommerceRef: { projectId: "project-ecommerce", assetId: "asset-scene" } },
+            { metadata: { assetId: "asset-logo" } },
+            { metadata: { assetId: "asset-outside-project" } },
+        ],
+        assets,
+    );
+
+    expect(selection.productAssetIds).toEqual(["asset-product"]);
+    expect(selection.modelAssetIds).toEqual(["asset-model"]);
+    expect(selection.sceneAssetIds).toEqual(["asset-scene"]);
+    expect(selection.brandAssetIds).toEqual(["asset-logo"]);
+
+    const params = ecommerceWorkspaceSelectionSearchParams(selection);
+    params.append("productAssetIds", "asset-outside-project");
+    const parsed = ecommerceWorkspaceSelectionFromSearchParams(params, new Set(assets.map((asset) => asset.id)));
+    const merged = mergeEcommerceWorkspaceAssetSelection({ productAssetIds: ["default-product"], supportingAssetIds: ["default-package"], modelAssetIds: [], sceneAssetIds: [], brandAssetIds: [] }, parsed);
+
+    expect(merged.productAssetIds).toEqual(["asset-product"]);
+    expect(merged.supportingAssetIds).toEqual(["default-package"]);
+    expect(merged.modelAssetIds).toEqual(["asset-model"]);
+    expect(merged.sceneAssetIds).toEqual(["asset-scene"]);
+    expect(merged.brandAssetIds).toEqual(["asset-logo"]);
 });
 
 test("run-id changes preserve a user's ecommerce frame and node layout", () => {

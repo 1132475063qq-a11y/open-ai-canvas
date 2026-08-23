@@ -1,39 +1,13 @@
 import type { EcommerceArtifact, EcommerceProductionAttempt, EcommerceProductionSlot, ProjectAsset } from "@/services/api/projects";
+import { ecommerceSelectionKeyForRole, emptyEcommerceWorkspaceAssetSelection, type EcommerceWorkspaceAssetSelection } from "@/ecommerce/canvas/ecommerce-workspace-entry";
 
-export type EcommerceAssetSelectionDefaults = {
-    productAssetIds: string[];
-    supportingAssetIds: string[];
-    modelAssetIds: string[];
-    sceneAssetIds: string[];
-    brandAssetIds: string[];
-};
+export type EcommerceAssetSelectionDefaults = EcommerceWorkspaceAssetSelection;
 
-const ecommerceSelectionKeyByRole: Record<string, keyof EcommerceAssetSelectionDefaults> = {
-    product_primary: "productAssetIds",
-    product_front: "productAssetIds",
-    product_back: "productAssetIds",
-    product_detail: "productAssetIds",
-    product_supporting: "supportingAssetIds",
-    packaging: "supportingAssetIds",
-    model_reference: "modelAssetIds",
-    scene_reference: "sceneAssetIds",
-    logo: "brandAssetIds",
-    brand_reference: "brandAssetIds",
-};
-
-export function ecommerceAssetSelectionDefaults(
-    assets: Pick<ProjectAsset, "id" | "mediaType" | "projectRole">[],
-): EcommerceAssetSelectionDefaults {
-    const defaults: EcommerceAssetSelectionDefaults = {
-        productAssetIds: [],
-        supportingAssetIds: [],
-        modelAssetIds: [],
-        sceneAssetIds: [],
-        brandAssetIds: [],
-    };
+export function ecommerceAssetSelectionDefaults(assets: Pick<ProjectAsset, "id" | "mediaType" | "projectRole">[]): EcommerceAssetSelectionDefaults {
+    const defaults = emptyEcommerceWorkspaceAssetSelection();
     for (const asset of assets) {
         if (asset.mediaType !== "image") continue;
-        const key = ecommerceSelectionKeyByRole[asset.projectRole || ""];
+        const key = ecommerceSelectionKeyForRole(asset.projectRole);
         if (key && !defaults[key].includes(asset.id)) defaults[key].push(asset.id);
     }
     return defaults;

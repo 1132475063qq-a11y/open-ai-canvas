@@ -9,45 +9,30 @@ import type {
     ProjectAsset,
     ProjectDetail,
 } from "@/services/api/projects";
+import { resolveResourceUrl } from "@/services/api/resources";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type ViewportTransform } from "@/types/canvas";
 
 type EcommerceCanvasProjection = Pick<ProjectDetail, "project" | "assets" | "ecommerceArtifacts">;
 
-type WorkflowDefinition = {
-    kind: EcommerceNodeKind;
-    title: string;
-    artifactType?: string;
-    x: number;
-    y: number;
-    width?: number;
-    height?: number;
-};
-
-const FRAME_POSITION = { x: 100, y: 100 };
-const FRAME_EXPANDED_WIDTH = 2000;
-const ECOMMERCE_PROJECTION_LAYOUT_VERSION = 2;
+const FRAME_POSITION = { x: 80, y: 80 };
+const FRAME_EXPANDED_WIDTH = 1120;
+const ECOMMERCE_PROJECTION_LAYOUT_VERSION = 3;
 const LEGACY_FRAME_EXPANDED_WIDTH = 1840;
 const LEGACY_RESULT_GAP_X = 280;
 const LEGACY_RESULT_GAP_Y = 220;
 const LEGACY_RESULT_WIDTH = 240;
 const LEGACY_RESULT_HEIGHT = 180;
 const RESULT_COLUMNS = 6;
-const RESULT_TOP = 680;
-const RESULT_GAP_X = 320;
-const RESULT_GAP_Y = 245;
+const RESULT_TOP = 300;
+const RESULT_GAP_X = 190;
+const RESULT_GAP_Y = 180;
+const ASSET_GAP_X = 190;
 
-const workflow: WorkflowDefinition[] = [
-    { kind: "product_input", title: "商品与品牌输入", x: 150, y: 170 },
-    { kind: "product_dna", title: "ProductDNA", artifactType: "product_dna", x: 490, y: 170 },
-    { kind: "model_profile", title: "Model Profile", artifactType: "model_profile", x: 830, y: 170 },
-    { kind: "scene_pack", title: "Scene Pack", artifactType: "scene_pack", x: 1170, y: 170 },
-    { kind: "preset_snapshot", title: "商拍预设快照", artifactType: "preset_snapshot", x: 1510, y: 170 },
-    { kind: "creative_direction", title: "系列视觉方向", artifactType: "creative_direction", x: 150, y: 420, width: 320 },
-    { kind: "shot_plan", title: "Shot Plan 与逐镜 Prompt", artifactType: "creative_shot_plan", x: 510, y: 420, width: 350 },
-    { kind: "generation_request", title: "生成与费用", artifactType: "generation_request", x: 900, y: 420, width: 290 },
-    { kind: "qa_report", title: "系列 QA", artifactType: "qa_report", x: 1230, y: 420 },
-    { kind: "motion_plan", title: "Motion Director", artifactType: "motion_plan", x: 1570, y: 420 },
-];
+type EcommerceAssetProjection = {
+    kind: Extract<EcommerceNodeKind, "product_input" | "model_profile" | "scene_pack">;
+    title: string;
+    assets: ProjectAsset[];
+};
 
 export function createEcommerceCanvasProjection(
     detail: EcommerceCanvasProjection,
@@ -60,40 +45,22 @@ export function createEcommerceCanvasProjection(
     const frameId = ecommerceNodeId(detail.project.id, "production_frame", runId);
     const projectedSlots = slotsForProjection(runView);
     const resultRows = Math.max(1, Math.ceil(projectedSlots.length / RESULT_COLUMNS));
-    const videoTop = RESULT_TOP + resultRows * RESULT_GAP_Y + 30;
-    const expandedHeight = videoTop + 260;
+    const videoTop = RESULT_TOP + resultRows * RESULT_GAP_Y + 36;
+    const expandedHeight = videoTop + 220;
 
     const frame = createProductionFrame(detail, frameId, runView, latestArtifacts, projectedSlots, expandedHeight);
-    const coreNodes = workflow.map((definition) => createWorkflowNode(detail, frameId, definition, latestArtifacts[definition.artifactType || ""], runView));
+    const assetGroups = ecommerceAssetGroups(detail.assets);
+    const assetNodes = assetGroups.flatMap((group) => group.assets.map((asset, index) => createAssetReferenceNode(detail.project.id, asset, group, index)));
     const resultNodes = projectedSlots.map((slotView, index) => createResultNode(detail.project.id, frameId, slotView, runView, index));
     const videoNode = createVideoSequenceNode(detail.project.id, frameId, runView, latestArtifacts.video_sequence, resultNodes, videoTop);
-    const nodes = [frame, ...coreNodes, ...resultNodes, videoNode];
-
-    const byKind = new Map(coreNodes.map((node) => [node.ecommerceKind, node]));
+    const nodes = [frame, ...assetNodes, ...resultNodes, videoNode];
     const connections: CanvasConnection[] = [];
-    const coreChain: EcommerceNodeKind[] = [
-        "product_input",
-        "product_dna",
-        "model_profile",
-        "scene_pack",
-        "preset_snapshot",
-        "creative_direction",
-        "shot_plan",
-        "generation_request",
-    ];
-    for (let index = 1; index < coreChain.length; index++) {
-        appendConnection(connections, detail.project.id, byKind.get(coreChain[index - 1])?.id, byKind.get(coreChain[index])?.id);
-    }
-    const generationNode = byKind.get("generation_request");
-    const qaNode = byKind.get("qa_report");
-    const motionNode = byKind.get("motion_plan");
+    const generationNode = frame;
     for (const resultNode of resultNodes) {
         appendConnection(connections, detail.project.id, generationNode?.id, resultNode.id);
-        appendConnection(connections, detail.project.id, resultNode.id, qaNode?.id);
         if (resultNode.metadata?.content) appendConnection(connections, detail.project.id, resultNode.id, videoNode.id);
     }
-    appendConnection(connections, detail.project.id, qaNode?.id, motionNode?.id);
-    appendConnection(connections, detail.project.id, motionNode?.id, videoNode.id);
+    for (const assetNode of assetNodes) appendConnection(connections, detail.project.id, assetNode.id, frame.id);
     return { nodes, connections };
 }
 
@@ -307,49 +274,46 @@ function createProductionFrame(
     return node;
 }
 
-function createWorkflowNode(
-    detail: EcommerceCanvasProjection,
-    frameId: string,
-    definition: WorkflowDefinition,
-    artifact: EcommerceArtifact | undefined,
-    runView: EcommerceRunView | undefined,
-) {
-    const primaryAsset = detail.assets.find((asset) => asset.projectRole === "product_primary") || detail.assets[0];
-    const metadata: CanvasNodeMetadata = {
-        workflowKind: definition.kind,
-        workflowTitle: definition.title,
-        workflowDescription: "电商生产事实投影",
-        skillDomain: "ecommerce",
-        ecommerceProjectionLayoutVersion: ECOMMERCE_PROJECTION_LAYOUT_VERSION,
-        content: nodeSummary(definition.kind, detail.assets, artifact, runView),
-        assetId: definition.kind === "product_input" ? primaryAsset?.id : undefined,
-        taskId: definition.kind === "generation_request" ? activeTaskId(runView) : undefined,
-    };
+function ecommerceAssetGroups(assets: ProjectAsset[]): EcommerceAssetProjection[] {
+    const productAssets = assets.filter((asset) => {
+        const role = asset.projectRole || "";
+        return role.startsWith("product_") || role === "packaging" || role === "logo";
+    });
+    const modelAssets = assets.filter((asset) => asset.projectRole === "model_reference");
+    const sceneAssets = assets.filter((asset) => asset.projectRole === "scene_reference" || asset.projectRole === "brand_reference");
+    return [
+        { kind: "product_input", title: "商品素材", assets: productAssets },
+        { kind: "model_profile", title: "模特素材", assets: modelAssets },
+        { kind: "scene_pack", title: "场景素材", assets: sceneAssets },
+    ].filter((group) => group.assets.length) as EcommerceAssetProjection[];
+}
+
+function createAssetReferenceNode(projectId: string, asset: ProjectAsset, group: EcommerceAssetProjection, index: number) {
+    const content = resolveResourceUrl(asset.storageKey);
+    const visual = Boolean(content) && asset.mediaType.startsWith("image");
     const node = createEcommerceCanvasNode(
-        CanvasNodeType.Text,
-        definition.kind,
-        { x: definition.x, y: definition.y },
+        visual ? CanvasNodeType.Image : CanvasNodeType.Text,
+        group.kind,
+        { x: -180, y: 100 + index * 190 },
+        { projectId, assetId: asset.id, assetVersionId: asset.primaryVersionId },
         {
-            projectId: detail.project.id,
-            runId: runView?.run.id,
-            presetId: runView?.run.presetId,
-            presetVersion: runView?.run.presetVersion,
-            assetId: definition.kind === "product_input" || definition.kind === "product_dna" ? primaryAsset?.id : undefined,
-            assetVersionId: definition.kind === "product_input" || definition.kind === "product_dna" ? primaryAsset?.primaryVersionId : undefined,
-            artifactId: artifact?.id,
-            artifactRevision: artifact?.revision,
-            skillId: skillId(artifact?.skillRef),
-            taskId: definition.kind === "generation_request" ? activeTaskId(runView) : undefined,
+            workflowKind: "ecommerce_production",
+            workflowTitle: group.title,
+            workflowDescription: `${assetRoleLabel(asset.projectRole || "unassigned")} · AI 商拍输入素材`,
+            skillDomain: "ecommerce",
+            ecommerceProjectionLayoutVersion: ECOMMERCE_PROJECTION_LAYOUT_VERSION,
+            content: content || asset.previewText || asset.title,
+            storageKey: asset.storageKey,
+            assetId: asset.id,
+            status: "success",
         },
-        metadata,
-        nodeState(definition.kind, artifact, runView, detail.assets.length > 0),
+        { lifecycle: "draft", production: "ready", evidence: "recorded", attention: "none" },
     );
-    node.id = ecommerceNodeId(detail.project.id, definition.kind, runView?.run.id);
-    node.title = definition.title;
-    node.parentId = frameId;
-    node.width = definition.width || 300;
-    node.height = definition.height || 180;
-    node.position = { x: definition.x, y: definition.y };
+    node.id = `${projectId}:ecommerce:asset:${asset.id}`;
+    node.title = asset.title || group.title;
+    node.width = visual ? 168 : 220;
+    node.height = visual ? 168 : 120;
+    node.position = { x: -180, y: 100 + index * 190 };
     return node;
 }
 

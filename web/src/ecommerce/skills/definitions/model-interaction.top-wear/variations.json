@@ -1,0 +1,5 @@
+{
+    "count": 6,
+    "roles": ["hero_full_body", "environment_wide", "medium_relation", "natural_action", "fabric_detail", "back_support"],
+    "variation_axis": ["camera", "distance", "pose", "composition", "lighting", "product_feature"]
+}

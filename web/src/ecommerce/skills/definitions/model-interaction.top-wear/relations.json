@@ -1,0 +1,9 @@
+{
+    "relations": [
+        { "from": "{{model}}", "relation": "wears", "to": "{{product}}" },
+        { "from": "{{garment}}", "relation": "follows", "to": "{{body}}" },
+        { "from": "{{hands}}", "relation": "contacts_naturally", "to": "{{garment}}" },
+        { "from": "{{product}}", "relation": "exists_in", "to": "{{scene}}" },
+        { "from": "{{logo}}", "relation": "visible_from", "to": "{{camera}}" }
+    ]
+}
