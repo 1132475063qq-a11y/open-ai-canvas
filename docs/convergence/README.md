@@ -18,7 +18,7 @@ corresponding project workspace.
 
 | Role                    | Location                                                                 | Revision                                           | Policy                                                          |
 | ----------------------- | ------------------------------------------------------------------------ | -------------------------------------------------- | --------------------------------------------------------------- |
-| Product mainline        | `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`                      | current handoff `f9b0f9b`                                      | Modify here                                                     |
+| Product mainline        | `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`                      | current `60a5463` (IR-01 integration)                           | Modify here                                                     |
 | Mainline branch         | same repository                                                          | `codex/converged-runtime`                          | All convergence work; push to `handoff/codex/converged-runtime` |
 | Baseline tag            | same repository                                                          | `baseline/upstream-1635927-20260821`               | Never move                                                      |
 | Historical checkout     | `/Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas`       | `faa60e3` ancestor; stale checkout                 | Read only; do not use as the convergence mainline                |
@@ -121,6 +121,15 @@ slices:
   automatic retry. Commercial-model visual acceptance remains open.
 - Focused repository/service closeout race tests pass. The AgentTeam authority
   package's `validate_goal_acceptance.py` also passes unchanged.
+- Ecommerce registry startup validation passes for 5 Agents, 9 Skills, 5
+  Intent routes, 5 Handoff routes, and 14 Artifact types. IR-01 deterministic
+  ProductDNA create/idempotency, Domain-scoped claim/recovery, append-only
+  completion/failure, registry-pin drift fencing, HTTP control-plane types,
+  backend build/vet, and frontend typecheck/build pass.
+- The unfiltered backend suite still reproduces the same five baseline service
+  failures listed above. The web package has no `lint` script, and Bun is not
+  installed in the current environment; both are recorded as unavailable, not
+  inferred as passing.
 
 The five failures above remain upstream baseline issues and currently reproduce
 in this network/runtime environment. They do not touch the Film runtime paths.

@@ -14,9 +14,9 @@
 
 - 当前分支：`codex/converged-runtime`
 - 当前施工目录：`/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`
-- 最新 checkpoint：`feat(ecommerce): wire canvas production handoff and golden skills`
-- 最新交接文档提交：`f9b0f9b docs(ecommerce): 保存项目对话交接记录`
-- 当前阶段：电商规划与生产编排骨架已接入，尚未完成完整商业闭环
+- 最新 checkpoint：`60a5463 feat(ecommerce): integrate provider-free IR-01 runtime`
+- 最新交接协议提交：`48bba21 docs(convergence): 明确主控 Agent 交接协议`
+- 当前阶段：Ecommerce registry 与 IR-01 Provider-free durable runtime 已接入；规划/生产与真实商业闭环仍分阶段推进
 - 默认输出：6 张、4K、按项目比例；数量可调整为 1-12 张
 - 费用边界：规划和报价可以在 Provider-free 模式验证；真实生成必须在报价确认后执行
 - 真实 Provider、五组 Bake-off、自动视觉质量判断和视频成片质量仍未完成
@@ -32,6 +32,10 @@
   - `still-life.lifestyle-tabletop@1`
 - Skill 包含 manifest、约束、关系、Prompt 模板、变体和 contract test
 - 后端已有 Ecommerce Artifact、Run、Slot、Attempt、报价、提交、QA、重试和视频计划数据结构
+- 已嵌入版本化 `ecommerce-agent-team@0.1.0`：5 个 Agent、9 个 Skill、5 条 Intent、5 条 Handoff、14 种 Artifact 类型，并保留旧 SkillRef alias
+- IR-01 `product_intelligence_agent` 已通过通用 AgentRuntime 持久化 `Run -> Step -> Attempt -> Event`、Ecommerce domain claim/lease/recovery 和 revision fencing，确定性地产出 evidence-bound `product_dna`；不创建 Provider Task、不计费
+- 已提供 Ecommerce Runtime catalog、Run 列表/创建/详情 API、前端 camelCase 合同和服务端 worker；规划生产 Run 会 pin registry，pin 漂移会阻止报价/提交/重试等写操作
+- IR-01 runtime Run 与付费 `EcommerceProductionRun` 目前保持明确分离，尚未声称两者已原子关联
 - 默认六镜头覆盖主视觉、环境全景、中景、动作/使用、商品特写和补充镜头
 
 ## 并行 Agent 分工
@@ -164,8 +168,8 @@ pnpm run build
 
 ## 下一阶段优先级
 
-1. 建立与 Film 同等级的 Ecommerce Agent Runtime 注册、Step、Attempt、事件和 Worker 合同。
-2. 消除前端 Skill 与后端私有 Skill 的两套真相，统一 manifest 和 executor 来源。
+1. 在 IR-01 的合同上扩展 IR-02/03/04/05，并为每条路线补 Step 输出、输入 Artifact 和失败恢复 focused tests。
+2. 让前端规划面板消费版本化 catalog 和 runtime Run，而不是维护第二套 Agent/Skill ID 常量。
 3. 补齐 ProductDNA 人工修订、AI 模特候选/身份卡、Scene Pack 候选和品牌包版本。
 4. 为 Retry 和 Video Sequence 补独立幂等键、公共 schemaVersion 和统一响应合同。
 5. 增加商品结构、颜色、Logo、模特身份、人体接触和场景连续性的自动视觉 QA；`UNCERTAIN` 必须人工处理。

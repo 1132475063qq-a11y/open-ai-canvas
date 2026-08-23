@@ -109,16 +109,33 @@ execution.
   music appends new `video-sequence` and `continuity-ledger` Artifact revisions;
   duration or aspect-ratio changes reset only the affected Slot result links,
   while prior paid Attempts remain readable history.
+- Ecommerce now has an embedded `ecommerce-agent-team@0.1.0` registry with 5
+  Agents, 9 Skills, 5 Intent routes, 5 Handoff routes and 14 canonical
+  Artifact types. Legacy frontend Skill references are resolved through
+  declared aliases, while persisted responsibility and runtime Step IDs use
+  canonical registry IDs.
+- Ecommerce IR-01 (`product_intelligence_agent`) is a provider-free durable
+  slice: one idempotent Run creates one ready Step, the domain-scoped worker
+  claims/recoveries one fenced Attempt, and a deterministic executor writes a
+  review-stage `product_dna` Artifact revision without a Provider Task or
+  billing fact.
+- Ecommerce catalog and Run control-plane endpoints plus frontend types are
+  available. Paid `EcommerceProductionRun` planning pins the registry and
+  rejects drift before quote/submit/retry/video writes. The planning Run and
+  the standalone IR-01 runtime Run are intentionally not claimed to be an
+  atomic pair yet.
 - The currently observed local 4173/8080 processes were started from this
   checkout at the earlier `1406b5f` commit. Their page or API behavior is not
-  evidence for the current `f9b0f9b` tree; restart the runtime from this branch
+  evidence for the current `60a5463` tree; restart the runtime from this branch
   before browser acceptance.
 - Service and HTTP fixtures now use a complete synthetic `LogicalModel ->
 Revision -> Route -> ChannelModel -> SystemChannel` text path. Focused tests
   cover missing, unknown, archived, disabled, restored, and legacy model states.
-- The web type check, focused Node smoke, Prettier check, and production build
-  pass. Bun and Go 1.25 were unavailable in the current shell, so the Bun suite
-  and newly changed backend suites were not executed here.
+- The web type check, focused Prettier check, and production build pass. The
+  Ecommerce registry, repository fencing, IR-01 service, pin contract and
+  backend build/vet checks pass with the bundled Go 1.25 toolchain. Bun is not
+  installed, and the web package has no `lint` script, so those checks are
+  recorded as `BLOCKED`/`NOT AVAILABLE` rather than inferred green.
 - The current sandbox denied opening a second localhost port, so the new UI
   build did not receive a fresh Playwright screenshot. The existing app did
   prove the backend logical-model publication and discovery path.
@@ -142,6 +159,9 @@ Revision -> Route -> ChannelModel -> SystemChannel` text path. Focused tests
    recovery, continuity review, timeline import, and FFmpeg export.
 6. Continue Ecommerce bake-off and golden paths only with authorized packs and
    persisted human scoring.
+7. Extend the provider-free Ecommerce runtime from IR-01 to the remaining
+   declared routes, then connect accepted ProductDNA revisions to the paid
+   planning adapter in an explicit transaction.
 
 ## Verification Commands
 

@@ -11,11 +11,11 @@
 当前 Git 状态：
 
 - 分支：`codex/converged-runtime`
-- HEAD：`f9b0f9b3fe19e170d4d4d78699bc2a63fad35933`
+- HEAD：`60a5463b6dd19ed0324a57ff09c250dce2a4e975`
 - GitHub 交接远程：`https://github.com/1132475063qq-a11y/open-ai-canvas.git`
 - 交接分支：`codex/converged-runtime`
 - 作者上游：`https://github.com/ddcat-ai/open-ai-canvas.git`
-- 当前工作树：干净
+- 当前工作树：代码已提交；交接文档本次更新后保持干净
 
 主线原则是把作者原版画布作为基础，只在需要的地方增量增加能力，不再维护另一份同名副本作为施工主线。
 
@@ -216,7 +216,7 @@ Worker 只修改自己的 Worktree 和 ownership，不调用真实 Provider，�
 
 文档提交：`77e2285 docs(ecommerce): 电商画布 - 补充并行开发与账号交接记录`
 
-当前交接文档提交：`f9b0f9b docs(ecommerce): 保存项目对话交接记录`
+当前交接协议提交：`48bba21 docs(convergence): 明确主控 Agent 交接协议`（本次代码交接见 `60a5463`）
 
 已接入：
 
@@ -228,6 +228,41 @@ Worker 只修改自己的 Worktree 和 ownership，不调用真实 Provider，�
 - 报价在真实提交前展示。
 - 两条结构化 Skill、后端角色扩展、SkillRef 对齐和电商画布隔离测试。
 - 后端 Ecommerce Artifact、Run、Slot、Attempt、报价、提交、QA、重试和视频计划数据结构。
+
+### 8.1 IR-01 Ecommerce Runtime 交接切片（2026-08-23）
+
+本次按主控协议先冻结 registry/Domain claim/前端 catalog 合同，再并行处理互不重叠的 Worker 范围，最后由主控统一接线和验收：
+
+【任务拆分】
+
+Agent A：Ecommerce registry 与 catalog 合同
+- 目标：把 Agent/Skill/Intent/Handoff/Artifact 定义加载为版本化、可校验的 Ecommerce registry。
+- ownership：`backend/internal/agentruntime/assets/ecommerce/**`、registry loader/tests、前端 `projects.ts` catalog 类型。
+- 输入：现有 Film registry 校验器和电商 Skill/Agent 规划 ID。
+- 输出：`6509285` 前端合同；registry 资产和主控接线在 `60a5463`。
+- 验收：registry contract、TypeScript typecheck、focused Prettier。
+
+Agent B：IR-01 durable executor
+- 目标：实现 provider-free `product_intelligence_agent` 的 Run/Step/Attempt/Artifact 执行。
+- ownership：`backend/internal/service/ecommerce_agent_runtime*.go`。
+- 输入：通用 AgentRuntime repository API、`ecommerce-agent-team@0.1.0`。
+- 输出：`fc21b46`；主控随后补 registry pin drift fencing。
+- 验收：Create/idempotency、deterministic ProductDNA、corrupt-input failure tests。
+
+Agent C：Repository domain isolation/evidence tests
+- 目标：证明 Ecommerce claim 不会领取 Film Run，过期 lease 恢复同一 Attempt，终态证据 append-only。
+- ownership：`backend/internal/repository/ecommerce_agent_runtime_test.go`。
+- 输入：Domain-aware claim contract。
+- 输出：`5847690`。
+- 验收：repository focused tests。
+
+【依赖关系】
+
+- 可并行：A 的前端 catalog 类型、B 的 service slice、C 的 repository tests；各自不修改同一文件。
+- 必须等待：主控先冻结 registry IDs/Domain 字段，再把 loader、claim、worker、HTTP 路由和旧 SkillRef adapter 接入共享热点。
+- 集成顺序：registry/合同 -> IR-01 service/repository -> handler/worker/pin validation -> unified checks。
+
+主控集成提交：`60a5463 feat(ecommerce): integrate provider-free IR-01 runtime`。IR-01 不调用真实模型、图片 Provider、计费或 API Key；付费 `EcommerceProductionRun` 与独立 runtime Run 的原子关联留作后续 adapter。
 
 ## 9. 渠道与 Provider 测试边界
 
@@ -259,10 +294,10 @@ Worker 只修改自己的 Worktree 和 ownership，不调用真实 Provider，�
 
 ### 尚未完整通过或受环境限制
 
-- 当前环境没有 Bun，前端 Bun 测试没有运行。
+- 当前环境没有 Bun，前端 Bun 测试为 `BLOCKED`。
 - 项目没有独立 `lint` script。
 - 六个大型文件的 focused Prettier 检查失败，但它们在本次改动前的基线也已经失败，不能误判为本次新增回归。
-- 完整后端服务集合仍有与本次电商切片无关的环境敏感失败。
+- 完整 `go test ./...` 仍有 5 个与本次电商切片无关的基线失败：3 个本机/内网地址校验测试，2 个 runtime policy deadline 测试；Ecommerce focused tests、backend build/vet 均通过。
 - 没有完成真实 Provider 图片质量、费用、延迟和失败率验收。
 - 没有完成五组商品的 Provider Bake-off。
 - 尚未证明两条黄金路径在真实 Provider 下达到“六张至少五张可用”。
@@ -277,15 +312,15 @@ Worker 只修改自己的 Worktree 和 ownership，不调用真实 Provider，�
 
 ## 11. 未完成风险
 
-1. 电商 Agent 名称和规划已存在，但还没有与 Film 同等级的持久化 Ecommerce Agent Runtime，包括 registry、Step、Attempt、lease/claim、事件和 Worker 执行。
-2. 前端结构化 Skill 与后端私有 Skill 仍存在两套事实来源，需要统一 manifest 和 executor。
+1. IR-01 durable runtime 已完成，但 IR-02/03/04/05 尚未接入同等级 executor、输入输出桥接和人工决策。
+2. 前端 catalog 已读取后端 manifest，但规划面板尚未消费 runtime Run/Step 的真实执行状态。
 3. ProductDNA 人工修订、AI 模特候选/身份卡、Scene Pack 候选和品牌包版本化尚未完整。
 4. Retry 尚缺独立幂等键；Video Sequence 创建也需要完整幂等保护。
-5. 公共 Ecommerce 请求/响应合同尚未统一携带计划中的全部 `schemaVersion`、`runId`、`presetId`、`presetVersion`、`skillRef`、`idempotencyKey` 和 `quoteFingerprint`。
-6. `brand_reference` 当前仍归入场景资产投影，尚未成为独立品牌包分组。
+5. Product-upload 目前通过 generic ProductionArtifact revision 引用进入 IR-01；旧 `EcommerceArtifact` 投影尚未做同事务 adapter，不能宣称双向同步。
+6. runtime Run 与付费 `EcommerceProductionRun` 尚未原子关联；报价前的证据门禁仍需显式接线。
 7. 自动视觉 QA 尚未真正判断商品结构、Logo、颜色、模特身份、人体接触物理关系和场景连续性。
 8. Top Wear 和 Lifestyle Tabletop 的真实商业黄金路径尚未完成。
-9. 历史 Documents checkout `faa60e3` 仍保留在本机，但不是当前主线；继续开发时以 Downloads checkout 的 `f9b0f9b` 和远端交接分支为准。
+9. 历史 Documents checkout `faa60e3` 仍保留在本机，但不是当前主线；继续开发时以 Downloads checkout 的 `60a5463` 和远端交接分支为准。
 10. GPT CLI 是独立设置方向，当前对话中已暂停，不应阻塞电商画布主线，也不应把 CLI 配置密钥写进仓库。
 
 ## 12. 新账号接手步骤
@@ -299,9 +334,9 @@ git rev-parse HEAD
 git status --short --branch
 ```
 
-确认 HEAD 为：
+确认 HEAD 至少包含：
 
-`f9b0f9b3fe19e170d4d4d78699bc2a63fad35933`
+`60a5463 feat(ecommerce): integrate provider-free IR-01 runtime`
 
 然后依次阅读：
 
@@ -316,13 +351,13 @@ git status --short --branch
 
 按以下顺序继续：
 
-1. 先冻结 Ecommerce Agent Runtime、Skill manifest 和公共 API 合同。
-2. 再补 retry/video sequence 幂等、报价过期和失败恢复测试。
-3. 实现 ProductDNA、模特身份卡、Scene Pack 和品牌包版本。
-4. 接入确定性商品/身份/场景 QA，并把 `UNCERTAIN` 转人工处理。
-5. 用授权的上装和静物素材完成两条 Provider-free 黄金路径。
-6. 配置渠道后做真实 Provider Bake-off，记录质量、费用、延迟和失败率。
-7. 最后再扩展其他品类、预设和图片转视频验收。
+1. 在 IR-01 合同上扩展 IR-02/03/04/05，并补输入 Artifact、Step 输出和失败恢复测试。
+2. 让前端规划面板消费版本化 catalog 与 runtime Run/Step 状态。
+3. 补 retry/video sequence 幂等、报价过期和失败恢复测试。
+4. 实现 ProductDNA、模特身份卡、Scene Pack 和品牌包版本，并做显式旧 EcommerceArtifact adapter。
+5. 接入确定性商品/身份/场景 QA，并把 `UNCERTAIN` 转人工处理。
+6. 用授权的上装和静物素材完成两条 Provider-free 黄金路径。
+7. 配置渠道后做真实 Provider Bake-off，记录质量、费用、延迟和失败率。
 
 ## 14. 记录边界
 
