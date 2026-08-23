@@ -36,6 +36,7 @@ import { listLogicalModels, type PublicLogicalModel } from "@/services/api/logic
 import type { ProjectDetail } from "@/services/api/projects";
 import { latestFilmAttemptsByShot, normalizeFilmBatchShotIds, summarizeFilmBatch, type FilmBatchQuoteItem } from "@/lib/canvas/film-batch-production";
 import { collectLockedFilmInputRevisionIds, FILM_AUTO_INTENT_ROUTE, filmIntentSelection } from "@/lib/canvas/film-intent-routing";
+import { filmRunLogicalModelId, formatFilmImageOptions, resolveFilmImageOptions } from "@/lib/canvas/film-production-model";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { FilmVideoProductionSection } from "@/components/canvas/film-video-production-section";
 import { FilmVisualQCSection } from "@/components/canvas/film-visual-qc-section";
@@ -156,7 +157,7 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
     const pendingDecision = detail?.humanDecisions.find((decision) => decision.status === "pending");
     const selectedImageModel = imageModels.find((model) => model.id === imageModelId);
     const imageOptions = useMemo(() => resolveFilmImageOptions(selectedImageModel), [selectedImageModel]);
-    const imageQualityLabel = formatFilmQualityLabel(imageOptions.quality);
+    const imageOptionsLabel = formatFilmImageOptions(imageOptions);
     const canQuote = Boolean(rootRunId && shotId && imageModelId && imageOptions.size && artifactChoices.every((item) => item.revision?.status === "locked"));
 
     useEffect(() => {
@@ -500,6 +501,7 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
                             reviewBeforeExecution={reviewBeforeExecution}
                             onReviewBeforeExecutionChange={setReviewBeforeExecution}
                             pendingDecision={pendingDecision}
+                            activeRunHasTextModel={Boolean(filmRunLogicalModelId(activeRun || detail?.run))}
                             creating={createRunMutation.isPending}
                             onCreate={() => createRunMutation.mutate()}
                             onDecision={(action) => decisionMutation.mutate(action)}
@@ -561,7 +563,7 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
                                 imageModelId={imageModelId}
                                 onImageModelChange={handleImageModelChange}
                                 imageOptions={imageOptions}
-                                imageQualityLabel={imageQualityLabel}
+                                imageOptionsLabel={imageOptionsLabel}
                                 canQuote={canQuote && batchShotIds.length > 0}
                                 items={batchItems}
                                 latestAttemptsByShot={latestAttemptsByShot}
@@ -583,7 +585,7 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
                                 imageModelId={imageModelId}
                                 onImageModelChange={handleImageModelChange}
                                 imageOptions={imageOptions}
-                                imageQualityLabel={imageQualityLabel}
+                                imageOptionsLabel={imageOptionsLabel}
                                 canQuote={canQuote}
                                 quote={quote}
                                 quoting={quoteMutation.isPending}
@@ -713,6 +715,7 @@ function RunSection({
     reviewBeforeExecution,
     onReviewBeforeExecutionChange,
     pendingDecision,
+    activeRunHasTextModel,
     creating,
     onCreate,
     onDecision,
@@ -736,6 +739,7 @@ function RunSection({
     reviewBeforeExecution: boolean;
     onReviewBeforeExecutionChange: (value: boolean) => void;
     pendingDecision?: { id: string; question: string };
+    activeRunHasTextModel: boolean;
     creating: boolean;
     onCreate: () => void;
     onDecision: (action: "approve" | "cancel") => void;
@@ -756,7 +760,7 @@ function RunSection({
                     options={runs.map((run) => ({ value: run.id, label: `${run.intentRouteId || "Run"} · ${run.status} · ${run.objective.slice(0, 24)}` }))}
                 />
             ) : null}
-            {activeRun && pendingDecision ? (
+            {activeRun && pendingDecision && activeRunHasTextModel ? (
                 <Alert
                     type="warning"
                     showIcon
@@ -774,6 +778,19 @@ function RunSection({
                     }
                 />
             ) : null}
+            {activeRun && pendingDecision && !activeRunHasTextModel ? (
+                <Alert
+                    type="error"
+                    showIcon
+                    message="此 Run 未绑定逻辑文本模型"
+                    description="确认后无法执行。请取消这条 Run，待管理员发布逻辑文本模型后重新创建。"
+                    action={
+                        <Button size="small" danger disabled={decisionPending} onClick={() => onDecision("cancel")}>
+                            取消 Run
+                        </Button>
+                    }
+                />
+            ) : null}
             <Input.TextArea value={objective} onChange={(event) => onObjectiveChange(event.target.value)} autoSize={{ minRows: 2, maxRows: 4 }} placeholder="描述这次短剧制作目标" />
             <div className="grid grid-cols-2 gap-2">
                 <Select
@@ -781,13 +798,23 @@ function RunSection({
                     value={routeId}
                     placeholder="Intent 路由"
                     onChange={onRouteChange}
-                    options={[
-                        { value: FILM_AUTO_INTENT_ROUTE, label: "自动识别 Intent" },
-                        ...routes.map((route) => ({ value: route.id, label: route.name ? `${route.id} · ${route.name}` : route.id })),
-                    ]}
+                    options={[{ value: FILM_AUTO_INTENT_ROUTE, label: "自动识别 Intent" }, ...routes.map((route) => ({ value: route.id, label: route.name ? `${route.id} · ${route.name}` : route.id }))]}
                 />
                 <Select className="w-full" value={textModelId || undefined} placeholder="文本模型" onChange={onTextModelChange} options={textModels.map((model) => ({ value: model.id, label: model.name }))} />
             </div>
+            {!textModels.length ? (
+                <Alert
+                    type="error"
+                    showIcon
+                    message="尚未发布逻辑文本模型"
+                    description="Film Agent 必须绑定后台逻辑文本模型，普通设置里的本机 CLI 或自定义渠道不会绕过持久化 Worker。"
+                    action={
+                        <Button size="small" href="/admin/models">
+                            前往发布
+                        </Button>
+                    }
+                />
+            ) : null}
             {requiresAgent ? (
                 <Select
                     className="w-full"
@@ -801,7 +828,7 @@ function RunSection({
                 <input type="checkbox" checked={reviewBeforeExecution} onChange={(event) => onReviewBeforeExecutionChange(event.target.checked)} />
                 生成前保留人工确认
             </label>
-            <Button block type="primary" icon={<Sparkles className="size-3.5" />} loading={creating} disabled={!objective.trim() || (requiresAgent && !agentId)} onClick={onCreate}>
+            <Button block type="primary" icon={<Sparkles className="size-3.5" />} loading={creating} disabled={!objective.trim() || !textModelId || (requiresAgent && !agentId)} onClick={onCreate}>
                 {activeRun ? "新建规划 Run" : "开始 Agent 规划"}
             </Button>
         </section>
@@ -923,7 +950,7 @@ function GenerationSection({
     imageModelId,
     onImageModelChange,
     imageOptions,
-    imageQualityLabel,
+    imageOptionsLabel,
     canQuote,
     quote,
     quoting,
@@ -940,7 +967,7 @@ function GenerationSection({
     imageModelId: string;
     onImageModelChange: (value: string) => void;
     imageOptions: FilmProductionImageOptions;
-    imageQualityLabel: string;
+    imageOptionsLabel: string;
     canQuote: boolean;
     quote: FilmProductionImageQuote | null;
     quoting: boolean;
@@ -958,7 +985,7 @@ function GenerationSection({
                 <Select className="w-full" value={imageModelId || undefined} placeholder="图片模型" onChange={onImageModelChange} options={imageModels.map((model) => ({ value: model.id, label: model.name }))} />
             </div>
             <Button block icon={<Coins className="size-3.5" />} disabled={!canQuote} loading={quoting} onClick={onQuote}>
-                生成报价（{imageOptions.size || "需配置比例"} · {imageQualityLabel}）
+                生成报价（{imageOptionsLabel}）
             </Button>
             {!imageOptions.size ? <InlineNotice text="当前图片模型没有声明 9:16 能力，暂不能提交短剧竖屏报价" /> : null}
             {quote ? (
@@ -995,7 +1022,7 @@ function BatchGenerationSection({
     imageModelId,
     onImageModelChange,
     imageOptions,
-    imageQualityLabel,
+    imageOptionsLabel,
     canQuote,
     items,
     latestAttemptsByShot,
@@ -1016,7 +1043,7 @@ function BatchGenerationSection({
     imageModelId: string;
     onImageModelChange: (value: string) => void;
     imageOptions: FilmProductionImageOptions;
-    imageQualityLabel: string;
+    imageOptionsLabel: string;
     canQuote: boolean;
     items: FilmBatchQuoteItem[];
     latestAttemptsByShot: Map<string, FilmProductionAttemptView>;
@@ -1067,7 +1094,7 @@ function BatchGenerationSection({
                 })}
             </div>
             <Button block icon={<Coins className="size-3.5" />} disabled={!canQuote || !selectedShotIds.length} loading={quoting} onClick={onQuote}>
-                {summary.quoted ? "重新生成报价" : "生成批量报价"}（{imageOptions.size || "需配置比例"} · {imageQualityLabel}）
+                {summary.quoted ? "重新生成报价" : "生成批量报价"}（{imageOptionsLabel}）
             </Button>
             {!imageOptions.size ? <InlineNotice text="当前图片模型没有声明 9:16 能力，暂不能提交短剧竖屏报价" /> : null}
             {items.length ? (
@@ -1239,68 +1266,6 @@ function stableOperationKey(ref: { current: { signature: string; key: string } }
         ref.current = { signature, key: `${prefix}:${createClientId()}` };
     }
     return ref.current.key;
-}
-
-function resolveFilmImageOptions(model?: PublicLogicalModel): FilmProductionImageOptions {
-    const sizeConstraint = model?.capabilitySpec.options?.size;
-    const size = sizeConstraint ? resolvePortraitSize(optionStringValues(sizeConstraint.values)) : undefined;
-    const qualityConstraint = model?.capabilitySpec.options?.quality;
-    const quality = qualityConstraint ? chooseFilmQuality(optionStringValues(qualityConstraint.values), model?.defaultOptions?.quality) : undefined;
-    return { ...(size ? { size } : {}), ...(quality ? { quality } : {}) };
-}
-
-function optionStringValues(values?: unknown[]) {
-    return (values || []).filter((value): value is string => typeof value === "string" && value.trim() !== "").map((value) => value.trim());
-}
-
-function resolvePortraitSize(values: string[]) {
-    if (values.some((value) => value === "*")) return "9:16";
-    if (values.length === 0) return undefined;
-    const portrait = values.find(isPortraitNineSixteenSize);
-    return portrait;
-}
-
-function isPortraitNineSixteenSize(value: string) {
-    const normalized = value.toLowerCase().replaceAll("×", "x").replace(/\s+/g, "");
-    if (normalized === "9:16") return true;
-    const match = normalized.match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$/);
-    if (!match) return false;
-    const width = Number(match[1]);
-    const height = Number(match[2]);
-    return width > 0 && height > 0 && Math.abs(width / height - 9 / 16) < 0.0005;
-}
-
-function chooseFilmQuality(values: string[], defaultValue: unknown) {
-    if (values.length === 0) return undefined;
-    if (values.some((value) => value === "*")) {
-        const fallback = typeof defaultValue === "string" ? defaultValue.trim() : "";
-        return fallback && fallback.toLowerCase() !== "auto" ? fallback : undefined;
-    }
-    const preferred = ["4k", "high", "2k", "medium", "hd", "1k", "low", "standard"];
-    for (const candidate of preferred) {
-        const match = values.find((value) => value.toLowerCase() === candidate);
-        if (match) return match;
-    }
-    const fallback = typeof defaultValue === "string" ? defaultValue.trim() : "";
-    return values.find((value) => value.toLowerCase() === fallback.toLowerCase()) || undefined;
-}
-
-function formatFilmQualityLabel(value?: string) {
-    switch (value?.toLowerCase()) {
-        case "4k":
-        case "high":
-            return "4K";
-        case "2k":
-        case "medium":
-        case "hd":
-            return "2K";
-        case "1k":
-        case "low":
-        case "standard":
-            return "1K";
-        default:
-            return value || "自动";
-    }
 }
 
 function resolveRequiredArtifacts(details: FilmAgentRunDetail[]): FilmArtifactChoice[] {

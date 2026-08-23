@@ -16,14 +16,15 @@ corresponding project workspace.
 
 ## Pinned Sources
 
-| Role | Location | Revision | Policy |
-|---|---|---|---|
-| Product mainline | `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2` | `ce86bb7` on 2026-08-21 | Modify here |
-| Mainline branch | same repository | `codex/converged-runtime` | All convergence work |
-| Baseline tag | same repository | `baseline/upstream-1635927-20260821` | Never move |
-| Feature donor | `/Users/xiangyuqin/Downloads/infinite-canvas-short-drama` | `codex/phase4-film-nodes` plus its dirty worktree | Read only; cherry-pick concepts and scoped modules |
-| AgentTeam authority | `/Users/xiangyuqin/Downloads/影视短剧AgentTeam_v1.3.1_Conflict_Hardened` | v1.3.1 | Read only; compile contracts into runtime data |
-| Downloaded ZIP checkout | `/Users/xiangyuqin/Downloads/open-ai-canvas-main` | v1.0.49 | Historical reference only |
+| Role                    | Location                                                                 | Revision                                           | Policy                                                          |
+| ----------------------- | ------------------------------------------------------------------------ | -------------------------------------------------- | --------------------------------------------------------------- |
+| Product mainline        | `/Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas`       | author baseline `ce86bb7` plus convergence commits | Modify here                                                     |
+| Mainline branch         | same repository                                                          | `codex/converged-runtime`                          | All convergence work; push to `handoff/codex/converged-runtime` |
+| Baseline tag            | same repository                                                          | `baseline/upstream-1635927-20260821`               | Never move                                                      |
+| Seed checkout           | `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`                      | local source snapshot                              | Read only after the canonical checkout was created              |
+| Feature donor           | `/Users/xiangyuqin/Downloads/infinite-canvas-short-drama`                | `codex/phase4-film-nodes` plus its dirty worktree  | Read only; cherry-pick concepts and scoped modules              |
+| AgentTeam authority     | `/Users/xiangyuqin/Downloads/影视短剧AgentTeam_v1.3.1_Conflict_Hardened` | v1.3.1                                             | Read only; compile contracts into runtime data                  |
+| Downloaded ZIP checkout | `/Users/xiangyuqin/Downloads/open-ai-canvas-main`                        | v1.0.49                                            | Historical reference only                                       |
 
 The donor worktree contains user changes. Do not reset, clean, format, or use it
 as a merge target.
@@ -131,6 +132,10 @@ commercial multi-scene acceptance, finishing, and release work.
 See `ecommerce-provider-evaluation.md` for the Ecommerce Provider bake-off
 record contract and its boundary between durable evaluation data and real
 commercial evidence.
+
+See `CONTINUE-HERE.md` for the current writable checkout, local runtime facts,
+the latest verified Film model-readiness slice, and the exact account-handoff
+continuation order.
 
 Use the package-native commands. In this development environment, invoke the
 bundled Node executable explicitly for `canvas-agent`; `bun test` is not a

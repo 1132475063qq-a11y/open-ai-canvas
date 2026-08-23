@@ -91,6 +91,13 @@ archived` transaction, but this is control-plane evidence rather than a real
 generated film. The configured commercial Provider path, real media semantic
 QC, and final-film acceptance remain open.
 
+Local readiness update (2026-08-23): a configured and priced `gpt-image-2`
+system route was published as an available Film logical image model and was
+discovered by the Film workspace. The Film panel now selects a concrete
+vertical 4K size separately from provider quality and blocks legacy/new Agent
+Runs that do not pin a logical text model. No paid Film request or real-media
+acceptance was produced by this configuration check, so Gate 3 remains open.
+
 ## Gate 4: Film User Closure
 
 - Image and video generation paths produce real persisted Results.

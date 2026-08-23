@@ -34,6 +34,13 @@ description: 已实现但尚未由最终用户完整确认的功能与剩余验�
 - 已使用授权渠道调用 `gpt-image-2` 验证 `POST /v1/images/generations`：不带 `response_format` 返回 `data[].url`，带 `response_format: b64_json` 返回 `data[].b64_json`，两种结果均符合 `openai-image` 协议。
 - 生成返回的远程 PNG 已能下载并识别为有效图片。旧袜子任务的两次 Attempt 在上传参考图时被上游以 `413 Request Entity Too Large` 拒绝，且未保存可回填的 Provider 请求 ID；发送副本压缩和三种返图结构适配已完成，仍待重新报价后在应用内完成一次新 Attempt 的端到端验收。
 
+### Film 逻辑模型现场就绪性
+
+- 2026-08-23 已在本地管理员后台把已配置、已计价的 `gpt-image-2` 系统渠道发布为 `GPT Image 2 · Film` 逻辑图片模型；Film 面板刷新后可发现该模型，证明系统渠道到后端逻辑路由再到 Film UI 的配置链可用。
+- Film 竖屏选项已改为优先真实 `2160x3840`，并把像素尺寸与 Provider `quality=high` 分开显示；`high` 不再被标成“4K”，未来声明 8K 时也不会静默超过当前 4K 目标。
+- 当前没有可用的后台逻辑文本模型。旧验收 Run 未绑定 `logicalModelId`，新 UI 会阻止确认并要求取消；没有文本模型时也不能创建新的不可执行 Run。
+- 上述只证明路由发布和前置校验，不是商业生成证据。本次没有创建 Film 报价、付费 Task、Provider 请求、Result 或 QC 记录。
+
 ## Film 图片转视频
 
 - 已实现 `已接受图片 -> 锁定逐镜视频 Prompt -> Sequence/Slot -> 单槽位报价 -> 明示确认费用 -> Provider -> 视频 Result -> 系统 QC -> 人工 QC`。
