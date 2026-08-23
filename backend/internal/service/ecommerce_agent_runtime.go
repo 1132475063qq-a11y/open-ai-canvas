@@ -339,6 +339,12 @@ func normalizeEcommerceAgentRunInput(request CreateEcommerceAgentRunRequest) (ma
 	if err := json.Unmarshal(encoded, &normalized); err != nil {
 		return nil, BadAuthRequest("商品事实分析输入无法标准化")
 	}
+	if containsInlineMediaDataURL(normalized) {
+		return nil, BadAuthRequest("Ecommerce Agent 输入不能包含内嵌媒体，请引用已上传资源")
+	}
+	if containsAgentRuntimeSecret(normalized) {
+		return nil, BadAuthRequest("Ecommerce Agent 输入不能包含 API Key、Token 或鉴权头")
+	}
 	return normalized, nil
 }
 

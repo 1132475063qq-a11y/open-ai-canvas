@@ -61,6 +61,19 @@ func TestCreateEcommerceAgentRunIsDurableAndIdempotent(t *testing.T) {
 	_ = repo
 }
 
+func TestCreateEcommerceAgentRunRejectsSecretsAndInlineMedia(t *testing.T) {
+	svc, _, _, project := newEcommerceAgentRuntimeTestService(t)
+	cases := []CreateEcommerceAgentRunRequest{
+		{Objective: "识别商品事实", Input: map[string]any{"api_key": "must-not-persist"}},
+		{Objective: "识别商品事实", Input: map[string]any{"reference": "data:image/png;base64,AAAA"}},
+	}
+	for index, request := range cases {
+		if _, err := svc.CreateEcommerceAgentRun(project.UserID, project.ID, "ecommerce-secret-"+string(rune('a'+index)), request); authStatus(err) != 400 {
+			t.Fatalf("case %d rejected input error = %v, want 400", index, err)
+		}
+	}
+}
+
 func TestProcessNextEcommerceAgentStepPersistsDeterministicProductDNAWithoutProvider(t *testing.T) {
 	svc, repo, db, project := newEcommerceAgentRuntimeTestService(t)
 	created, err := svc.CreateEcommerceAgentRun(project.UserID, project.ID, "ecommerce-ir01-002", CreateEcommerceAgentRunRequest{
