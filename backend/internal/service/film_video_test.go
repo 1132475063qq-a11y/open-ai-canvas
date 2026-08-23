@@ -28,6 +28,86 @@ func TestExtractFilmVideoPromptsRequiresShotScopedVideoPrompt(t *testing.T) {
 	}
 }
 
+func TestRebuildFilmContinuityLedgerRebindsStructuredIdsAfterReorder(t *testing.T) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	sequence := model.FilmVideoSequence{
+		ID: "sequence-continuity-rebind", UserID: "user-continuity-rebind", ProjectID: "project-continuity-rebind", RootRunID: "run-continuity-rebind",
+		PromptArtifactID: "prompt-artifact", PromptArtifactRevisionID: "prompt-revision", PromptArtifactDigest: "prompt-digest",
+		RegistryID: "film-registry", RegistryVersion: "1.3.1", RegistryDigest: "registry-digest",
+		ArtifactID: "sequence-artifact", ArtifactRevisionID: "sequence-revision",
+	}
+	shots := []model.Shot{
+		{ID: "shot-continuity-1", Title: "First", Description: "first shot"},
+		{ID: "shot-continuity-2", Title: "Second", Description: "second shot"},
+	}
+	slots := []model.FilmVideoSlot{
+		{ID: "slot-continuity-1", UserID: sequence.UserID, ProjectID: sequence.ProjectID, RootRunID: sequence.RootRunID, SequenceID: sequence.ID, Position: 0, ShotID: shots[0].ID, Prompt: "first prompt", DurationMs: 2_000, SourceImageAttemptID: "image-attempt-1", SourceImageResultID: "image-result-1", SourceImageResourceID: "image-resource-1", SourceImageArtifactID: "image-artifact-1", SourceImageRevisionID: "image-revision-1"},
+		{ID: "slot-continuity-2", UserID: sequence.UserID, ProjectID: sequence.ProjectID, RootRunID: sequence.RootRunID, SequenceID: sequence.ID, Position: 1, ShotID: shots[1].ID, Prompt: "second prompt", DurationMs: 3_000, SourceImageAttemptID: "image-attempt-2", SourceImageResultID: "image-result-2", SourceImageResourceID: "image-resource-2", SourceImageArtifactID: "image-artifact-2", SourceImageRevisionID: "image-revision-2"},
+	}
+	ledger, states, issues, _, revision, err := buildFilmContinuityLedger(sequence, slots, shots, at)
+	if err != nil {
+		t.Fatalf("buildFilmContinuityLedger(): %v", err)
+	}
+	updatedSlots := []model.FilmVideoSlot{slots[1], slots[0]}
+	updatedSlots[0].Position = 0
+	updatedSlots[1].Position = 1
+	updatedShots := []model.Shot{shots[1], shots[0]}
+	updatedLedger, updatedStates, updatedIssues, _, updatedRevision, err := rebuildFilmContinuityLedgerForSequenceUpdate(
+		sequence, updatedSlots, updatedShots, repository.FilmContinuityLedgerDetail{Ledger: *ledger, Shots: states, Issues: issues}, at.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("rebuildFilmContinuityLedgerForSequenceUpdate(): %v", err)
+	}
+	if updatedLedger.ID != ledger.ID || updatedLedger.ArtifactRevisionID != updatedRevision.ID || updatedRevision.ID == revision.ID {
+		t.Fatalf("updated ledger identity = %#v, revision = %#v", updatedLedger, updatedRevision)
+	}
+	stateIDByShot := map[string]string{states[0].ShotID: states[0].ID, states[1].ShotID: states[1].ID}
+	issueIDByShot := map[string]string{issues[0].ShotID: issues[0].ID, issues[1].ShotID: issues[1].ID}
+	var content filmContinuityArtifactContent
+	if err := json.Unmarshal([]byte(updatedRevision.ContentJSON), &content); err != nil {
+		t.Fatalf("decode updated continuity revision: %v", err)
+	}
+	if content.LedgerID != ledger.ID || len(content.Shots) != 2 || len(content.Issues) != 2 {
+		t.Fatalf("updated continuity content = %#v", content)
+	}
+	for index, state := range updatedStates {
+		if state.ID != stateIDByShot[state.ShotID] || content.Shots[index].ShotID != state.ShotID || content.Shots[index].StateID != state.ID {
+			t.Fatalf("updated state %d = %#v, artifact state = %#v", index, state, content.Shots[index])
+		}
+	}
+	for index, issue := range updatedIssues {
+		if issue.ID != issueIDByShot[issue.ShotID] || content.Issues[index].ShotID != issue.ShotID || content.Issues[index].IssueID != issue.ID {
+			t.Fatalf("updated issue %d = %#v, artifact issue = %#v", index, issue, content.Issues[index])
+		}
+	}
+}
+
+func TestResolveFilmVideoMusicResourceKeepsOwnedAudioSnapshot(t *testing.T) {
+	fixture := newFilmProductionTestFixture(t)
+	music := model.Resource{
+		ID: "film-music-resource", UserID: fixture.Project.UserID, Kind: "audio", Status: model.ResourceStatusReady,
+		MimeType: "audio/mpeg", DurationMs: 12_500, Size: 128,
+	}
+	if err := fixture.DB.Create(&music).Error; err != nil {
+		t.Fatalf("create music resource: %v", err)
+	}
+	resourceID, durationMs, err := fixture.Service.resolveFilmVideoMusicResource(fixture.Project.UserID, music.ID)
+	if err != nil || resourceID != music.ID || durationMs != music.DurationMs {
+		t.Fatalf("resolve music resource = %q, %d, error = %v", resourceID, durationMs, err)
+	}
+
+	image := model.Resource{
+		ID: "film-image-resource", UserID: fixture.Project.UserID, Kind: "image", Status: model.ResourceStatusReady,
+		MimeType: "image/png", DurationMs: 0, Size: 128,
+	}
+	if err := fixture.DB.Create(&image).Error; err != nil {
+		t.Fatalf("create image resource: %v", err)
+	}
+	if _, _, err := fixture.Service.resolveFilmVideoMusicResource(fixture.Project.UserID, image.ID); authStatus(err) != http.StatusConflict {
+		t.Fatalf("non-audio music resource error = %v, want 409", err)
+	}
+}
+
 func TestFilmMultiShotGoldenPathLinksRetryVideoContinuityAndRecovery(t *testing.T) {
 	fixture := newFilmProductionTestFixture(t)
 	now := time.Now().UTC()
@@ -377,6 +457,34 @@ func TestFilmVideoGoldenPathRequiresAcceptedImageAndPersistsQC(t *testing.T) {
 	stale, err := fixture.Service.ListFilmVideoSequences(fixture.Project.UserID, fixture.Project.ID, sequence.Sequence.RootRunID, 10)
 	if err != nil || len(stale) != 1 || stale[0].SequenceReview == nil || stale[0].SequenceReview.Valid {
 		t.Fatalf("stale sequence review = %#v, error = %v", stale, err)
+	}
+	updated, err := fixture.Service.UpdateFilmVideoSequence(
+		fixture.Project.UserID, fixture.Project.ID, sequence.Sequence.ID,
+		UpdateFilmVideoSequenceRequest{
+			ExpectedRevision: stale[0].Sequence.Revision, Title: stale[0].Sequence.Title, AspectRatio: stale[0].Sequence.AspectRatio,
+			TargetDurationMs: 4_000, Slots: []UpdateFilmVideoSequenceSlotRequest{{SlotID: sequence.Slots[0].Slot.ID, DurationMs: 4_000}},
+		},
+	)
+	if err != nil || updated.Sequence.Revision != stale[0].Sequence.Revision+1 || updated.Sequence.ArtifactRevisionID == stale[0].Sequence.ArtifactRevisionID ||
+		updated.Continuity.Ledger.ArtifactRevisionID == stale[0].Continuity.Ledger.ArtifactRevisionID || updated.Slots[0].Slot.Status != model.FilmVideoSlotStatusReady ||
+		updated.Slots[0].Slot.CurrentAttemptID != "" || updated.Slots[0].Slot.Revision != 2 {
+		t.Fatalf("updated video sequence = %#v, error = %v", updated, err)
+	}
+	if updated.Slots[0].Attempts[0].Accepted || updated.SequenceReview == nil || updated.SequenceReview.Valid {
+		t.Fatalf("updated video sequence should stale the old attempt and review = %#v", updated)
+	}
+	updatedQuote, err := fixture.Service.CreateFilmVideoQuote(
+		fixture.Project.UserID, fixture.Project.ID, "film-video-quote-after-plan-update",
+		CreateFilmVideoQuoteRequest{SequenceID: updated.Sequence.ID, SlotID: updated.Slots[0].Slot.ID, LogicalModelID: videoModelID, Options: FilmVideoOptions{Resolution: "720p"}},
+	)
+	if err != nil || updatedQuote.DurationMs != 4_000 || updatedQuote.RetryOfAttemptID != "" {
+		t.Fatalf("quote after plan update = %#v, error = %v", updatedQuote, err)
+	}
+	if _, err := fixture.Service.UpdateFilmVideoSequence(
+		fixture.Project.UserID, fixture.Project.ID, sequence.Sequence.ID,
+		UpdateFilmVideoSequenceRequest{ExpectedRevision: stale[0].Sequence.Revision},
+	); authStatus(err) != http.StatusConflict {
+		t.Fatalf("stale plan update error = %v, want 409", err)
 	}
 }
 

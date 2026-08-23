@@ -11,6 +11,41 @@ import (
 
 const filmContinuityCompilerID = "film-continuity-compiler-v1"
 
+type filmContinuityArtifactContent struct {
+	SchemaVersion int                              `json:"schemaVersion"`
+	ArtifactType  string                           `json:"artifactType"`
+	LedgerID      string                           `json:"ledgerId"`
+	SequenceID    string                           `json:"sequenceId"`
+	MediaState    model.FilmContinuityMediaState   `json:"mediaState"`
+	Status        model.FilmContinuityLedgerStatus `json:"status"`
+	Dimensions    []string                         `json:"dimensions"`
+	Shots         []filmContinuityArtifactShot     `json:"shots"`
+	Issues        []filmContinuityArtifactIssue    `json:"issues"`
+}
+
+type filmContinuityArtifactShot struct {
+	StateID       string                               `json:"stateId"`
+	ShotID        string                               `json:"shotId"`
+	Position      int                                  `json:"position"`
+	Status        model.FilmContinuityShotStatus       `json:"status"`
+	ReadIn        map[string]any                       `json:"readIn"`
+	WriteOut      map[string]any                       `json:"writeOut"`
+	Dimensions    map[string]string                    `json:"dimensions"`
+	ReferenceLock map[string]any                       `json:"referenceLock"`
+}
+
+type filmContinuityArtifactIssue struct {
+	IssueID      string `json:"issueId"`
+	ShotID       string `json:"shotId"`
+	Dimension    string `json:"dimension"`
+	Severity     string `json:"severity"`
+	Code         string `json:"code"`
+	Message      string `json:"message"`
+	Authority    string `json:"authority"`
+	Owner        string `json:"owner"`
+	RepairStatus string `json:"repairStatus"`
+}
+
 var filmContinuityDimensions = []string{
 	"character_state",
 	"costume_state",
@@ -141,6 +176,78 @@ func buildFilmContinuityLedger(
 		}),
 		CreatedByType: "runtime", CreatedByID: filmContinuityCompilerID, CreatedAt: at,
 	}
+	return ledger, states, issues, artifact, revision, nil
+}
+
+func rebuildFilmContinuityLedgerForSequenceUpdate(
+	sequence model.FilmVideoSequence,
+	slots []model.FilmVideoSlot,
+	shots []model.Shot,
+	existing repository.FilmContinuityLedgerDetail,
+	at time.Time,
+) (*model.FilmContinuityLedger, []model.FilmContinuityShotState, []model.FilmContinuityIssue, *model.ProductionArtifact, *model.ProductionArtifactRevision, error) {
+	ledger, states, issues, artifact, revision, err := buildFilmContinuityLedger(sequence, slots, shots, at)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	var content filmContinuityArtifactContent
+	if err := json.Unmarshal([]byte(revision.ContentJSON), &content); err != nil {
+		return nil, nil, nil, nil, nil, conflictError("Continuity Ledger revision 内容已损坏，不能直接编辑当前视频序列")
+	}
+	content.LedgerID = existing.Ledger.ID
+	stateIDsByShot := make(map[string]string, len(existing.Shots))
+	for _, state := range existing.Shots {
+		stateIDsByShot[state.ShotID] = state.ID
+	}
+	issueIDsByShot := make(map[string][]string, len(existing.Issues))
+	for _, issue := range existing.Issues {
+		issueIDsByShot[issue.ShotID] = append(issueIDsByShot[issue.ShotID], issue.ID)
+	}
+	if len(stateIDsByShot) != len(existing.Shots) || len(content.Shots) != len(states) || len(content.Issues) != len(issues) {
+		return nil, nil, nil, nil, nil, conflictError("Continuity Ledger revision 镜头集合已变化，不能直接编辑当前视频序列")
+	}
+	for index := range states {
+		if content.Shots[index].ShotID != states[index].ShotID {
+			return nil, nil, nil, nil, nil, conflictError("Continuity Ledger revision 镜头顺序已变化，不能直接编辑当前视频序列")
+		}
+		oldID, ok := stateIDsByShot[states[index].ShotID]
+		if !ok {
+			return nil, nil, nil, nil, nil, conflictError("Continuity Ledger 缺少待编辑镜头状态")
+		}
+		content.Shots[index].StateID = oldID
+		states[index].ID = oldID
+		states[index].LedgerID = existing.Ledger.ID
+	}
+	for index := range issues {
+		if content.Issues[index].ShotID != issues[index].ShotID {
+			return nil, nil, nil, nil, nil, conflictError("Continuity Ledger revision 问题顺序已变化，不能直接编辑当前视频序列")
+		}
+		ids := issueIDsByShot[issues[index].ShotID]
+		if len(ids) == 0 {
+			return nil, nil, nil, nil, nil, conflictError("Continuity Ledger 缺少待编辑镜头问题")
+		}
+		oldID := ids[0]
+		issueIDsByShot[issues[index].ShotID] = ids[1:]
+		content.Issues[index].IssueID = oldID
+		issues[index].ID = oldID
+		issues[index].LedgerID = existing.Ledger.ID
+	}
+	for _, ids := range issueIDsByShot {
+		if len(ids) > 0 {
+			return nil, nil, nil, nil, nil, conflictError("Continuity Ledger 缺少待编辑镜头问题")
+		}
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	revision.ContentJSON = string(encoded)
+	revision.ContentDigest = digestBytesHex(encoded)
+	ledger.ID = existing.Ledger.ID
+	ledger.ArtifactID = existing.Ledger.ArtifactID
+	ledger.ArtifactRevisionID = revision.ID
+	ledger.CreatedAt = existing.Ledger.CreatedAt
+	artifact.ID = existing.Ledger.ArtifactID
 	return ledger, states, issues, artifact, revision, nil
 }
 

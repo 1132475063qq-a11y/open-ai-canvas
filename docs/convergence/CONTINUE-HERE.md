@@ -78,6 +78,21 @@ execution.
   unavailable, or available. It hides approval for unavailable Runs, disables
   impossible retries, clears stale creation selections, and surfaces backend
   decision errors in the panel.
+- Film video-sequence planning now preserves the user-selected shot order and
+  per-shot 1-30 second durations instead of re-sorting every sequence by the
+  source storyboard position. An owned, ready audio resource can be attached
+  as a frozen sequence input and is imported once into the existing audio
+  timeline track when the accepted sequence is opened.
+- Created Film video sequences can now be edited and restored through a
+  revision-fenced backend API. Saving order, duration, aspect ratio, title, or
+  music appends new `video-sequence` and `continuity-ledger` Artifact revisions;
+  duration or aspect-ratio changes reset only the affected Slot result links,
+  while prior paid Attempts remain readable history.
+- The currently observed local 4173/8080 processes belong to a separate
+  `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2` checkout at the earlier
+  `1406b5f` commit. Their page or API behavior is not evidence for this
+  `open-ai-canvas` checkout; start the runtime from this branch before browser
+  acceptance.
 - Service and HTTP fixtures now use a complete synthetic `LogicalModel ->
 Revision -> Route -> ChannelModel -> SystemChannel` text path. Focused tests
   cover missing, unknown, archived, disabled, restored, and legacy model states.
@@ -102,8 +117,9 @@ Revision -> Route -> ChannelModel -> SystemChannel` text path. Focused tests
    the paid submit.
 4. Persist the real Result, run model visual QC, record human QC, and prove a
    paid retry as a new quote and Attempt when needed.
-5. Publish a real image-to-video logical model, complete two shots, continuity
-   review, timeline import, and FFmpeg export.
+5. Publish a real image-to-video logical model, complete two shots, use and
+   persist the sequence ordering/duration/music controls, then prove refresh
+   recovery, continuity review, timeline import, and FFmpeg export.
 6. Continue Ecommerce bake-off and golden paths only with authorized packs and
    persisted human scoring.
 

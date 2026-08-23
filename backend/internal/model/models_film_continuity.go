@@ -22,8 +22,9 @@ const (
 	FilmReworkStatusSuperseded FilmReworkStatus = "superseded"
 )
 
-// FilmContinuityLedger is an immutable structured preflight over one video
-// sequence. It does not claim visual continuity until real media is reviewed.
+// FilmContinuityLedger is the current structured preflight projection over one
+// video sequence. Its immutable Artifact revisions preserve prior projections;
+// it does not claim visual continuity until real media is reviewed.
 type FilmContinuityLedger struct {
 	ID                 string                     `json:"id" gorm:"primaryKey;size:36"`
 	UserID             string                     `json:"userId" gorm:"index;size:36"`

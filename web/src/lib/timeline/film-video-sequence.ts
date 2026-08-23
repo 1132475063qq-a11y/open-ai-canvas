@@ -1,6 +1,7 @@
 import type { FilmProductionResult, FilmVideoSequenceView } from "@/services/api/film-production";
 import type { TimelineClip, TimelineDirectMedia, TimelineProject } from "@/types/timeline";
-import { DEFAULT_VIDEO_TRACK_ID, normalizeTimelineProject } from "./timeline-tracks";
+import { resourceFileUrl } from "@/services/api/resources";
+import { DEFAULT_AUDIO_TRACK_ID, DEFAULT_VIDEO_TRACK_ID, normalizeTimelineProject } from "./timeline-tracks";
 
 export type FilmVideoTimelineImport = {
     timeline: TimelineProject;
@@ -13,9 +14,7 @@ export function canImportFilmVideoSequence(sequence: FilmVideoSequenceView) {
 }
 
 export function importFilmVideoSequenceToTimeline(current: TimelineProject | null | undefined, sequence: FilmVideoSequenceView): FilmVideoTimelineImport {
-    const accepted = sequence.slots
-        .map((slot) => ({ slot: slot.slot, attempt: acceptedFilmVideoAttempt(slot.attempts) }))
-        .sort((left, right) => left.slot.position - right.slot.position);
+    const accepted = sequence.slots.map((slot) => ({ slot: slot.slot, attempt: acceptedFilmVideoAttempt(slot.attempts) })).sort((left, right) => left.slot.position - right.slot.position);
     if (!hasAcceptedFilmVideoSequenceReview(sequence)) {
         throw new Error("整组视频必须通过当前版本的连续性验收后才能加入时间线");
     }
@@ -48,6 +47,32 @@ export function importFilmVideoSequenceToTimeline(current: TimelineProject | nul
         });
         cursorMs += item.slot.durationMs;
     }
+    if (sequence.sequence.musicResourceId) {
+        const sourceDurationMs = sequence.sequence.musicDurationMs || sequence.sequence.targetDurationMs;
+        clips.push({
+            id: `clip-${filmVideoTimelinePrefix(sequence.sequence.id)}music`,
+            kind: "audio",
+            nodeId: `${filmVideoTimelinePrefix(sequence.sequence.id)}music`,
+            trackId: DEFAULT_AUDIO_TRACK_ID,
+            startMs: startMs,
+            durationMs: Math.min(sequence.sequence.targetDurationMs || cursorMs - startMs, sourceDurationMs),
+            sourceStartMs: 0,
+            sourceDurationMs,
+            title: `${sequence.sequence.title} · 基础音乐`,
+            volume: 0.8,
+            fadeInMs: 250,
+            fadeOutMs: 500,
+            directMedia: {
+                id: `${filmVideoTimelinePrefix(sequence.sequence.id)}music`,
+                kind: "audio",
+                title: `${sequence.sequence.title} · 基础音乐`,
+                storageKey: `resource:${sequence.sequence.musicResourceId}`,
+                url: resourceFileUrl(sequence.sequence.musicResourceId),
+                durationMs: sourceDurationMs,
+                mimeType: "audio/*",
+            },
+        });
+    }
 
     return {
         timeline: normalizeTimelineProject({ ...base, clips: [...retained, ...clips], updatedAt: new Date().toISOString() }),
@@ -57,21 +82,21 @@ export function importFilmVideoSequenceToTimeline(current: TimelineProject | nul
 }
 
 function hasAcceptedFilmVideoSequenceReview(sequence: FilmVideoSequenceView) {
-    return sequence.sequence.status === "completed" && sequence.continuity?.ledger.status === "ready" && sequence.continuity.ledger.mediaState === "available" && sequence.sequenceReview?.valid === true && sequence.sequenceReview.decision === "PASS" && sequence.sequenceReview.action === "accept";
+    return (
+        sequence.sequence.status === "completed" &&
+        sequence.continuity?.ledger.status === "ready" &&
+        sequence.continuity.ledger.mediaState === "available" &&
+        sequence.sequenceReview?.valid === true &&
+        sequence.sequenceReview.decision === "PASS" &&
+        sequence.sequenceReview.action === "accept"
+    );
 }
 
 function acceptedFilmVideoAttempt(attempts: FilmVideoSequenceView["slots"][number]["attempts"]) {
     return attempts.find((attempt) => attempt.accepted && attempt.result?.url);
 }
 
-function filmVideoDirectMedia(
-    sequence: FilmVideoSequenceView,
-    slotId: string,
-    position: number,
-    shotId: string,
-    durationMs: number,
-    result: FilmProductionResult,
-): TimelineDirectMedia {
+function filmVideoDirectMedia(sequence: FilmVideoSequenceView, slotId: string, position: number, shotId: string, durationMs: number, result: FilmProductionResult): TimelineDirectMedia {
     const payload = parseFilmVideoResultPayload(result.payload);
     return {
         id: `${filmVideoTimelinePrefix(sequence.sequence.id)}${slotId}`,

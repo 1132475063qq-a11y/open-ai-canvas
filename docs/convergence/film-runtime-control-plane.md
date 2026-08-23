@@ -79,6 +79,16 @@ The Film AgentTeam v1.3.1 control plane is backend-owned and isolated to
   Reference Locks, and unresolved semantic issues. Its `structured_only` media
   state explicitly prevents text/Prompt checks from being reported as visual
   continuity evidence.
+- Film sequence planning keeps the selected Slot order and per-Slot duration in
+  the locked `video-sequence` Artifact. Optional music is resolved to an owned,
+  ready audio Resource, with its duration snapshotted before execution; it is
+  timeline audio, not an implicit Provider URL or an automatic replacement for
+  media QC.
+- Revision-fenced sequence editing persists order, duration, aspect ratio,
+  title, and owned music changes. Each save appends immutable Sequence and
+  Continuity Artifact revisions, invalidates stale quotes and whole-Sequence
+  reviews, and clears current media links only for Slots whose duration or
+  aspect ratio requires regeneration; old paid Attempts remain append-only.
 - Video completion runs evidence-bounded technical media QC over managed media,
   MIME, dimensions/aspect ratio, and duration when available. A proven hard
   mismatch creates one append-only, slot-scoped `rework-event` and blocks human
@@ -129,6 +139,7 @@ All endpoints require a valid session and a Film (`short-drama`) project:
 | `POST` | `/api/projects/:id/film/production/visual-qc-quotes/:quoteId/submit` | Confirm cost and create a separate visual QC Task/Attempt |
 | `POST` | `/api/projects/:id/film/production/video-sequences` | Create a Sequence and its structured Continuity Ledger from accepted images |
 | `GET` | `/api/projects/:id/film/production/video-sequences?rootRunId=&limit=20` | Restore Sequence, Slots, Attempts, Results, QC, Continuity, Rework, and costs |
+| `PATCH` | `/api/projects/:id/film/production/video-sequences/:sequenceId` | Save a revision-fenced ordering, duration, aspect-ratio, title, or music edit |
 | `POST` | `/api/projects/:id/film/production/video-sequences/:sequenceId/review` | Append a whole-sequence continuity and final acceptance review |
 | `POST` | `/api/projects/:id/film/production/video-quotes` | Freeze one Slot image-to-video request and cost |
 | `POST` | `/api/projects/:id/film/production/video-quotes/:quoteId/submit` | Confirm cost and create the paid video Task/Attempt |
@@ -161,7 +172,9 @@ The canvas stores references only. The backend is authoritative for:
 - `film_visual_qc_quotes` and `film_visual_qc_attempts`: frozen multimodal
   model-review evidence, independent cost, and append-only execution history.
 - `film_video_sequences`, `film_video_slots`, `film_video_quotes`, and
-  `film_video_attempts`: ordered video plans and append-only paid executions.
+  `film_video_attempts`: revision-fenced ordered video plans, current Slot
+  projections, and append-only paid executions. Sequence edits advance the
+  stable `video-sequence` Artifact rather than overwriting prior revisions.
 - `film_video_qc_reports`: technical system media QC and human media review as
   separate evidence facts.
 - `film_video_visual_qc_quotes` and `film_video_visual_qc_attempts`: frozen
@@ -174,8 +187,9 @@ The canvas stores references only. The backend is authoritative for:
   with scope fingerprints and explicit human/model source separation; an old
   report becomes invalid after any slot revision.
 - `film_continuity_ledgers`, `film_continuity_shot_states`, and
-  `film_continuity_issues`: immutable structured continuity preflight and
-  Reference Lock facts for one Sequence.
+  `film_continuity_issues`: the current structured continuity projection and
+  Reference Locks for one Sequence; immutable history is preserved by the
+  stable Ledger Artifact's append-only revisions.
 - `film_rework_events`: the smallest evidence-backed retry/revision scope and
   its recheck gate.
 - `results`: the explicit available media fact linked to the Attempt and

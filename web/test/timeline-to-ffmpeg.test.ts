@@ -209,12 +209,30 @@ describe("Film 视频序列导入时间线", () => {
         const first = importFilmVideoSequenceToTimeline(null, sequence);
         expect(first.importedCount).toBe(2);
         expect(first.replaced).toBe(false);
-        expect(first.timeline.clips.map((clip) => [clip.startMs, clip.durationMs])).toEqual([[0, 2_000], [2_000, 3_000]]);
+        expect(first.timeline.clips.map((clip) => [clip.startMs, clip.durationMs])).toEqual([
+            [0, 2_000],
+            [2_000, 3_000],
+        ]);
         expect(first.timeline.clips[0].directMedia?.storageKey).toBe("resource:video-1");
 
         const second = importFilmVideoSequenceToTimeline(first.timeline, sequence);
         expect(second.replaced).toBe(true);
         expect(second.timeline.clips).toHaveLength(2);
+        expect(second.timeline.durationMs).toBe(5_000);
+    });
+
+    test("带基础音乐时写入音频轨，并在重复导入时替换旧音乐", () => {
+        const sequence = filmSequenceView(true);
+        sequence.sequence.musicResourceId = "music-1";
+        sequence.sequence.musicDurationMs = 12_000;
+        const first = importFilmVideoSequenceToTimeline(null, sequence);
+        const audio = first.timeline.clips.find((clip) => clip.kind === "audio");
+        expect(audio?.trackId).toBe("audio-1");
+        expect(audio?.durationMs).toBe(5_000);
+        expect(audio?.directMedia?.storageKey).toBe("resource:music-1");
+
+        const second = importFilmVideoSequenceToTimeline(first.timeline, sequence);
+        expect(second.timeline.clips.filter((clip) => clip.kind === "audio")).toHaveLength(1);
         expect(second.timeline.durationMs).toBe(5_000);
     });
 });

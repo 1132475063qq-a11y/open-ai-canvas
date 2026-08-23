@@ -20,7 +20,22 @@ type CreateFilmVideoSequenceRequest struct {
 	Title                    string                               `json:"title"`
 	AspectRatio              string                               `json:"aspectRatio"`
 	TargetDurationMs         int64                                `json:"targetDurationMs"`
+	MusicResourceID          string                               `json:"musicResourceId"`
 	Slots                    []CreateFilmVideoSequenceSlotRequest `json:"slots"`
+}
+
+type UpdateFilmVideoSequenceRequest struct {
+	ExpectedRevision  int64                                    `json:"expectedRevision"`
+	Title             string                                   `json:"title"`
+	AspectRatio       string                                   `json:"aspectRatio"`
+	TargetDurationMs  int64                                    `json:"targetDurationMs"`
+	MusicResourceID   *string                                  `json:"musicResourceId"`
+	Slots             []UpdateFilmVideoSequenceSlotRequest     `json:"slots"`
+}
+
+type UpdateFilmVideoSequenceSlotRequest struct {
+	SlotID     string `json:"slotId"`
+	DurationMs int64  `json:"durationMs"`
 }
 
 type CreateFilmVideoSequenceSlotRequest struct {
@@ -199,6 +214,10 @@ func (s *Service) CreateFilmVideoSequence(userID string, projectID string, idemp
 	if err != nil {
 		return FilmVideoSequenceView{}, err
 	}
+	musicResourceID, musicDurationMs, err := s.resolveFilmVideoMusicResource(userID, request.MusicResourceID)
+	if err != nil {
+		return FilmVideoSequenceView{}, err
+	}
 	sequenceID := newID()
 	now := time.Now().UTC()
 	slots := make([]model.FilmVideoSlot, 0, len(request.Slots))
@@ -254,7 +273,7 @@ func (s *Service) CreateFilmVideoSequence(userID string, projectID string, idemp
 	if utf8.RuneCountInString(title) > 160 {
 		return FilmVideoSequenceView{}, BadAuthRequest("视频序列标题不能超过 160 个字符")
 	}
-	fingerprint, err := filmVideoSequenceFingerprint(projectID, request, *promptRevision, slots, aspectRatio, targetDuration)
+	fingerprint, err := filmVideoSequenceFingerprint(projectID, request, *promptRevision, slots, aspectRatio, targetDuration, musicResourceID, musicDurationMs)
 	if err != nil {
 		return FilmVideoSequenceView{}, err
 	}
@@ -274,7 +293,7 @@ func (s *Service) CreateFilmVideoSequence(userID string, projectID string, idemp
 	}
 	sequence := model.FilmVideoSequence{
 		ID: sequenceID, UserID: userID, IdempotencyKey: idempotencyKey, ProjectID: projectID, RootRunID: root.ID,
-		Title: title, AspectRatio: aspectRatio, TargetDurationMs: targetDuration,
+		Title: title, AspectRatio: aspectRatio, TargetDurationMs: targetDuration, MusicResourceID: musicResourceID, MusicDurationMs: musicDurationMs,
 		PromptArtifactID: promptArtifact.ID, PromptArtifactRevisionID: promptRevision.ID, PromptArtifactDigest: promptRevision.ContentDigest,
 		RegistryID: root.RegistryID, RegistryVersion: root.RegistryVersion, RegistryDigest: root.RegistryDigest,
 		RequestFingerprint: fingerprint, ArtifactID: newID(), ArtifactRevisionID: newID(),
@@ -322,6 +341,185 @@ func (s *Service) ListFilmVideoSequences(userID string, projectID string, rootRu
 		views = append(views, view)
 	}
 	return views, nil
+}
+
+func (s *Service) UpdateFilmVideoSequence(userID string, projectID string, sequenceID string, request UpdateFilmVideoSequenceRequest) (FilmVideoSequenceView, error) {
+	if _, err := s.requireMutableFilmProject(userID, projectID); err != nil {
+		return FilmVideoSequenceView{}, err
+	}
+	if request.ExpectedRevision < 1 {
+		return FilmVideoSequenceView{}, BadAuthRequest("编辑视频序列必须携带当前 revision")
+	}
+	detail, err := s.repo.FilmVideoSequenceForUser(userID, projectID, strings.TrimSpace(sequenceID))
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return FilmVideoSequenceView{}, NotFound("视频序列不存在")
+	}
+	if err != nil {
+		return FilmVideoSequenceView{}, err
+	}
+	if detail.Sequence.Revision != request.ExpectedRevision {
+		return FilmVideoSequenceView{}, conflictError("视频序列已被其他操作更新，请刷新后再编辑")
+	}
+	if len(request.Slots) == 0 || len(request.Slots) > maxFilmVideoSequenceSlots || len(request.Slots) != len(detail.Slots) {
+		return FilmVideoSequenceView{}, BadAuthRequest("编辑后的视频序列必须保留原有全部镜头，且包含 1-12 个镜头槽位")
+	}
+	if detail.Continuity == nil {
+		return FilmVideoSequenceView{}, conflictError("视频序列缺少 Continuity Ledger，暂时不能编辑")
+	}
+	for _, slot := range detail.Slots {
+		if slot.Slot.Status == model.FilmVideoSlotStatusQueued || slot.Slot.Status == model.FilmVideoSlotStatusRunning {
+			return FilmVideoSequenceView{}, conflictError("视频序列有镜头正在生成，请等待任务结束后再编辑")
+		}
+	}
+
+	oldSlotsByID := make(map[string]repository.FilmVideoSlotDetail, len(detail.Slots))
+	originalSlots := make([]model.FilmVideoSlot, 0, len(detail.Slots))
+	for _, slot := range detail.Slots {
+		oldSlotsByID[slot.Slot.ID] = slot
+		originalSlots = append(originalSlots, slot.Slot)
+	}
+	seenSlots := make(map[string]bool, len(request.Slots))
+	slots := make([]model.FilmVideoSlot, 0, len(request.Slots))
+	sequenceShots := make([]model.Shot, 0, len(request.Slots))
+	totalDuration := int64(0)
+	changedSlotIDs := make([]string, 0)
+	for position, input := range request.Slots {
+		slotID := strings.TrimSpace(input.SlotID)
+		if slotID == "" || seenSlots[slotID] {
+			return FilmVideoSequenceView{}, BadAuthRequest("视频序列编辑中的 slotId 不能为空或重复")
+		}
+		old, ok := oldSlotsByID[slotID]
+		if !ok {
+			return FilmVideoSequenceView{}, BadAuthRequest("视频序列编辑只能调整已有镜头槽位")
+		}
+		seenSlots[slotID] = true
+		duration, err := normalizeFilmVideoDuration(input.DurationMs, old.Slot.DurationMs)
+		if err != nil {
+			return FilmVideoSequenceView{}, err
+		}
+		updated := old.Slot
+		if updated.Position != position || updated.DurationMs != duration {
+			changedSlotIDs = append(changedSlotIDs, updated.ID)
+		}
+		updated.Position = position
+		updated.DurationMs = duration
+		if updated.DurationMs != old.Slot.DurationMs {
+			updated.Revision++
+			updated.CurrentAttemptID = ""
+			updated.ResultID = ""
+			updated.ResultArtifactID = ""
+			updated.ResultRevisionID = ""
+			updated.Status = model.FilmVideoSlotStatusReady
+		}
+		totalDuration += duration
+		shot, err := s.repo.ShotForProject(projectID, updated.ShotID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return FilmVideoSequenceView{}, NotFound("视频序列引用的短剧镜头不存在")
+		}
+		if err != nil {
+			return FilmVideoSequenceView{}, err
+		}
+		slots = append(slots, updated)
+		sequenceShots = append(sequenceShots, *shot)
+	}
+	if len(seenSlots) != len(detail.Slots) {
+		return FilmVideoSequenceView{}, BadAuthRequest("视频序列编辑必须包含全部原有镜头槽位")
+	}
+	targetDuration := request.TargetDurationMs
+	if targetDuration == 0 {
+		targetDuration = totalDuration
+	}
+	if targetDuration < 1_000 || targetDuration > 120_000 {
+		return FilmVideoSequenceView{}, BadAuthRequest("视频序列目标时长必须在 1-120 秒之间")
+	}
+	aspectRatio := detail.Sequence.AspectRatio
+	if strings.TrimSpace(request.AspectRatio) != "" {
+		aspectRatio, err = normalizeFilmVideoAspectRatio(request.AspectRatio)
+		if err != nil {
+			return FilmVideoSequenceView{}, err
+		}
+	}
+	if aspectRatio != detail.Sequence.AspectRatio {
+		changedSlotSet := make(map[string]bool, len(changedSlotIDs))
+		for _, changedSlotID := range changedSlotIDs {
+			changedSlotSet[changedSlotID] = true
+		}
+		for index := range slots {
+			old := oldSlotsByID[slots[index].ID].Slot
+			if slots[index].Revision == old.Revision {
+				slots[index].Revision++
+			}
+			slots[index].CurrentAttemptID = ""
+			slots[index].ResultID = ""
+			slots[index].ResultArtifactID = ""
+			slots[index].ResultRevisionID = ""
+			slots[index].Status = model.FilmVideoSlotStatusReady
+			if !changedSlotSet[slots[index].ID] {
+				changedSlotIDs = append(changedSlotIDs, slots[index].ID)
+				changedSlotSet[slots[index].ID] = true
+			}
+		}
+	}
+	title := strings.TrimSpace(request.Title)
+	if title == "" {
+		title = detail.Sequence.Title
+	}
+	if utf8.RuneCountInString(title) > 160 {
+		return FilmVideoSequenceView{}, BadAuthRequest("视频序列标题不能超过 160 个字符")
+	}
+	musicResourceID := detail.Sequence.MusicResourceID
+	musicDurationMs := detail.Sequence.MusicDurationMs
+	if request.MusicResourceID != nil {
+		musicResourceID, musicDurationMs, err = s.resolveFilmVideoMusicResource(userID, *request.MusicResourceID)
+		if err != nil {
+			return FilmVideoSequenceView{}, err
+		}
+	}
+	if len(changedSlotIDs) == 0 && title == detail.Sequence.Title && aspectRatio == detail.Sequence.AspectRatio &&
+		targetDuration == detail.Sequence.TargetDurationMs && musicResourceID == detail.Sequence.MusicResourceID && musicDurationMs == detail.Sequence.MusicDurationMs {
+		return s.filmVideoSequenceView(*detail)
+	}
+
+	updatedSequence := detail.Sequence
+	updatedSequence.Title = title
+	updatedSequence.AspectRatio = aspectRatio
+	updatedSequence.TargetDurationMs = targetDuration
+	updatedSequence.MusicResourceID = musicResourceID
+	updatedSequence.MusicDurationMs = musicDurationMs
+	updatedSequence.Revision = detail.Sequence.Revision + 1
+	updatedSequence.ArtifactRevisionID = newID()
+	updatedSequence.Status = filmVideoSequenceStatusAfterPlanUpdate(slots)
+	artifact, revision, err := buildFilmVideoSequenceArtifact(updatedSequence, slots, time.Now().UTC())
+	if err != nil {
+		return FilmVideoSequenceView{}, err
+	}
+	continuity, continuityShots, continuityIssues, continuityArtifact, continuityRevision, err := rebuildFilmContinuityLedgerForSequenceUpdate(
+		updatedSequence, slots, sequenceShots, *detail.Continuity, time.Now().UTC(),
+	)
+	if err != nil {
+		return FilmVideoSequenceView{}, err
+	}
+	updatedSequence.ArtifactRevisionID = revision.ID
+	artifact.ID = detail.Sequence.ArtifactID
+	continuityArtifact.ID = detail.Continuity.Ledger.ArtifactID
+	continuity.ArtifactID = continuityArtifact.ID
+	continuity.ArtifactRevisionID = continuityRevision.ID
+
+	stored, err := s.repo.UpdateFilmVideoSequence(repository.FilmVideoSequenceUpdateCommand{
+		UserID: userID, ProjectID: projectID, SequenceID: detail.Sequence.ID, ExpectedRevision: request.ExpectedRevision, ExpectedStatus: detail.Sequence.Status,
+		Sequence: &updatedSequence, OriginalSlots: originalSlots, Slots: slots, Artifact: artifact, Revision: revision,
+		Continuity: continuity, ContinuityShots: continuityShots, ContinuityIssues: continuityIssues,
+		ContinuityArtifact: continuityArtifact, ContinuityRevision: continuityRevision,
+		At: time.Now().UTC(), Event: repository.AgentRuntimeEventInput{
+			ID: newID(), EventType: "film.production.video.sequence_updated", ActorType: "human", ActorID: userID,
+			PayloadJSON: mustFilmJSON(map[string]any{"sequenceId": detail.Sequence.ID, "fromRevision": request.ExpectedRevision, "toRevision": updatedSequence.Revision, "changedSlotIds": changedSlotIDs}),
+		},
+	})
+	if err != nil {
+		return FilmVideoSequenceView{}, mapFilmVideoError(err)
+	}
+	view, err := s.filmVideoSequenceView(*stored)
+	return view, err
 }
 
 func (s *Service) CreateFilmVideoQuote(userID string, projectID string, idempotencyKey string, request CreateFilmVideoQuoteRequest) (FilmVideoQuoteView, error) {
@@ -613,6 +811,12 @@ func normalizeFilmVideoOptions(input FilmVideoOptions) FilmVideoOptions {
 }
 
 func validateFilmVideoRetryRequest(slot repository.FilmVideoSlotDetail, retryOf string, sequenceRetryAllowed bool) error {
+	if slot.Slot.Status == model.FilmVideoSlotStatusReady && slot.Slot.CurrentAttemptID == "" && slot.Slot.ResultID == "" {
+		if retryOf != "" {
+			return conflictError("当前视频槽位已回到待生成状态，不能引用旧 Attempt")
+		}
+		return nil
+	}
 	if len(slot.Attempts) == 0 {
 		if retryOf != "" {
 			return conflictError("该视频槽位还没有可重试的 Attempt")
@@ -801,9 +1005,9 @@ func (s *Service) filmVideoAttemptView(detail repository.FilmVideoAttemptDetail,
 	if currentHuman != nil {
 		current = currentHuman
 	}
-	accepted := currentHuman != nil && currentHuman.Decision == model.FilmProductionQCDecisionPass && currentHuman.Action == model.FilmProductionQCActionAccept
-	retryAllowed := detail.Attempt.Status == model.FilmProductionAttemptStatusFailed || detail.Attempt.Status == model.FilmProductionAttemptStatusCancelled ||
-		(detail.Attempt.Status == model.FilmProductionAttemptStatusSucceeded && currentHuman != nil && currentHuman.Decision == model.FilmProductionQCDecisionFail && currentHuman.Action == model.FilmProductionQCActionRetry)
+	accepted := currentVersion && currentHuman != nil && currentHuman.Decision == model.FilmProductionQCDecisionPass && currentHuman.Action == model.FilmProductionQCActionAccept
+	retryAllowed := currentVersion && (detail.Attempt.Status == model.FilmProductionAttemptStatusFailed || detail.Attempt.Status == model.FilmProductionAttemptStatusCancelled ||
+		(detail.Attempt.Status == model.FilmProductionAttemptStatusSucceeded && currentHuman != nil && currentHuman.Decision == model.FilmProductionQCDecisionFail && currentHuman.Action == model.FilmProductionQCActionRetry))
 	visualQCAttempts := make([]FilmVideoVisualQCAttemptView, 0, len(detail.VisualQCAttempts))
 	for _, visualAttempt := range detail.VisualQCAttempts {
 		view, err := s.filmVideoVisualQCAttemptView(visualAttempt, currentVersion && visualAttempt.Attempt.SourceResultRevisionID == detail.Attempt.ResultRevisionID)
@@ -884,6 +1088,8 @@ func mapFilmVideoError(err error) error {
 		return conflictError("当前视频 Attempt 状态或 QC 结论不允许重试")
 	case errors.Is(err, repository.ErrFilmProductionStateConflict):
 		return conflictError("Film 视频状态已变化，请刷新后重试")
+	case errors.Is(err, repository.ErrProductionArtifactConflict):
+		return conflictError("视频序列 Artifact 已变化，请刷新后重试")
 	case errors.Is(err, repository.ErrFilmProductionMediaMissing):
 		return conflictError("视频或来源图片媒体不可访问，不能继续")
 	case errors.Is(err, repository.ErrInsufficientCredits):

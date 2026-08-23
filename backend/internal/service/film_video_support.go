@@ -196,6 +196,54 @@ func normalizeFilmVideoDuration(value int64, shotDuration int64) (int64, error) 
 	return value, nil
 }
 
+func filmVideoSequenceStatusAfterPlanUpdate(slots []model.FilmVideoSlot) model.FilmVideoSequenceStatus {
+	if len(slots) == 0 {
+		return model.FilmVideoSequenceStatusReady
+	}
+	allAccepted := true
+	hasGenerating := false
+	hasReview := false
+	for _, slot := range slots {
+		if slot.Status != model.FilmVideoSlotStatusAccepted {
+			allAccepted = false
+		}
+		switch slot.Status {
+		case model.FilmVideoSlotStatusQueued, model.FilmVideoSlotStatusRunning:
+			hasGenerating = true
+		case model.FilmVideoSlotStatusNeedsReview, model.FilmVideoSlotStatusFailed, model.FilmVideoSlotStatusCancelled, model.FilmVideoSlotStatusUncertain:
+			hasReview = true
+		}
+	}
+	if allAccepted {
+		return model.FilmVideoSequenceStatusNeedsReview
+	}
+	if hasGenerating {
+		return model.FilmVideoSequenceStatusGenerating
+	}
+	if hasReview {
+		return model.FilmVideoSequenceStatusNeedsReview
+	}
+	return model.FilmVideoSequenceStatusReady
+}
+
+func (s *Service) resolveFilmVideoMusicResource(userID string, resourceID string) (string, int64, error) {
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
+		return "", 0, nil
+	}
+	resource, err := s.repo.ResourceForUser(userID, resourceID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", 0, NotFound("基础音乐资源不存在")
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	if resource.Status != model.ResourceStatusReady || resource.Kind != "audio" || !strings.HasPrefix(strings.ToLower(resource.MimeType), "audio/") {
+		return "", 0, conflictError("基础音乐资源当前不可用于视频序列")
+	}
+	return resource.ID, resource.DurationMs, nil
+}
+
 func filmVideoSeconds(durationMs int64) string {
 	seconds := int64(math.Ceil(float64(durationMs) / 1000))
 	if seconds < 1 {
@@ -221,7 +269,9 @@ func buildFilmVideoSequenceArtifact(sequence model.FilmVideoSequence, slots []mo
 	}
 	content, err := json.Marshal(map[string]any{
 		"schemaVersion": 1, "artifactType": "video-sequence", "sequenceId": sequence.ID, "title": sequence.Title,
-		"aspectRatio": sequence.AspectRatio, "targetDurationMs": sequence.TargetDurationMs, "slots": slotContent,
+		"aspectRatio": sequence.AspectRatio, "targetDurationMs": sequence.TargetDurationMs,
+		"musicResourceId": filmProductionEmptyStringAsNil(sequence.MusicResourceID), "musicDurationMs": sequence.MusicDurationMs,
+		"slots": slotContent,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -242,7 +292,7 @@ func buildFilmVideoSequenceArtifact(sequence model.FilmVideoSequence, slots []mo
 	return artifact, revision, nil
 }
 
-func filmVideoSequenceFingerprint(projectID string, request CreateFilmVideoSequenceRequest, promptRevision model.ProductionArtifactRevision, slots []model.FilmVideoSlot, aspectRatio string, targetDurationMs int64) (string, error) {
+func filmVideoSequenceFingerprint(projectID string, request CreateFilmVideoSequenceRequest, promptRevision model.ProductionArtifactRevision, slots []model.FilmVideoSlot, aspectRatio string, targetDurationMs int64, musicResourceID string, musicDurationMs int64) (string, error) {
 	items := make([]map[string]any, 0, len(slots))
 	for _, slot := range slots {
 		items = append(items, map[string]any{
@@ -254,7 +304,8 @@ func filmVideoSequenceFingerprint(projectID string, request CreateFilmVideoSeque
 	encoded, err := json.Marshal(map[string]any{
 		"schemaVersion": 1, "projectId": projectID, "rootRunId": strings.TrimSpace(request.RootRunID),
 		"promptRevisionId": promptRevision.ID, "promptDigest": promptRevision.ContentDigest, "title": strings.TrimSpace(request.Title),
-		"aspectRatio": aspectRatio, "targetDurationMs": targetDurationMs, "slots": items,
+		"aspectRatio": aspectRatio, "targetDurationMs": targetDurationMs, "musicResourceId": musicResourceID,
+		"musicDurationMs": musicDurationMs, "slots": items,
 	})
 	if err != nil {
 		return "", err

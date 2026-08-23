@@ -44,6 +44,8 @@ type FilmVideoSequence struct {
 	Title                    string                  `json:"title" gorm:"size:160"`
 	AspectRatio              string                  `json:"aspectRatio" gorm:"size:24"`
 	TargetDurationMs         int64                   `json:"targetDurationMs"`
+	MusicResourceID          string                  `json:"musicResourceId,omitempty" gorm:"index;size:36"`
+	MusicDurationMs          int64                   `json:"musicDurationMs,omitempty"`
 	PromptArtifactID         string                  `json:"promptArtifactId" gorm:"index;size:36"`
 	PromptArtifactRevisionID string                  `json:"promptArtifactRevisionId" gorm:"index;size:36"`
 	PromptArtifactDigest     string                  `json:"promptArtifactDigest" gorm:"size:64"`

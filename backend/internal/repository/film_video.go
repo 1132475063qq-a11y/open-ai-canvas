@@ -12,8 +12,30 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const maxFilmVideoSequenceSlots = 12
+
 type FilmVideoSequenceCreateCommand struct {
 	Sequence           *model.FilmVideoSequence
+	Slots              []model.FilmVideoSlot
+	Artifact           *model.ProductionArtifact
+	Revision           *model.ProductionArtifactRevision
+	Continuity         *model.FilmContinuityLedger
+	ContinuityShots    []model.FilmContinuityShotState
+	ContinuityIssues   []model.FilmContinuityIssue
+	ContinuityArtifact *model.ProductionArtifact
+	ContinuityRevision *model.ProductionArtifactRevision
+	Event              AgentRuntimeEventInput
+	At                 time.Time
+}
+
+type FilmVideoSequenceUpdateCommand struct {
+	UserID             string
+	ProjectID          string
+	SequenceID         string
+	ExpectedRevision   int64
+	ExpectedStatus     model.FilmVideoSequenceStatus
+	Sequence           *model.FilmVideoSequence
+	OriginalSlots      []model.FilmVideoSlot
 	Slots              []model.FilmVideoSlot
 	Artifact           *model.ProductionArtifact
 	Revision           *model.ProductionArtifactRevision
@@ -166,6 +188,207 @@ func (r *Repository) CreateFilmVideoSequence(command FilmVideoSequenceCreateComm
 	}
 	detail, err := r.FilmVideoSequenceForUser(command.Sequence.UserID, command.Sequence.ProjectID, sequenceID)
 	return detail, idempotent, err
+}
+
+func (r *Repository) UpdateFilmVideoSequence(command FilmVideoSequenceUpdateCommand) (*FilmVideoSequenceDetail, error) {
+	if err := validateFilmVideoSequenceUpdate(command); err != nil {
+		return nil, err
+	}
+	now := runtimeCommandTime(command.At)
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var project model.Project
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&project,
+			"id = ? AND user_id = ?", command.ProjectID, command.UserID).Error; err != nil {
+			return err
+		}
+		if project.Type != "short-drama" || project.Status != model.ProjectStatusActive {
+			return ErrFilmProductionStateConflict
+		}
+		var sequence model.FilmVideoSequence
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&sequence,
+			"id = ? AND user_id = ? AND project_id = ?", command.SequenceID, command.UserID, command.ProjectID).Error; err != nil {
+			return err
+		}
+		if sequence.Revision != command.ExpectedRevision || sequence.Status != command.ExpectedStatus || sequence.RootRunID != command.Sequence.RootRunID ||
+			sequence.ArtifactID != command.Artifact.ID || sequence.ArtifactRevisionID == command.Sequence.ArtifactRevisionID {
+			return ErrFilmProductionStateConflict
+		}
+		var root model.AgentRuntimeRun
+		if err := lockAgentRuntimeRun(tx, command.UserID, sequence.RootRunID, &root); err != nil {
+			return err
+		}
+		if root.ProjectID != command.ProjectID || root.Domain != "film" || root.RootRunID != root.ID ||
+			root.RegistryDigest != command.Sequence.RegistryDigest || root.Status == model.AgentRunStatusFailed || root.Status == model.AgentRunStatusCancelled {
+			return ErrFilmProductionStateConflict
+		}
+		if err := validateFilmVideoPromptArtifactTx(tx, &sequence); err != nil {
+			return err
+		}
+		var currentSlots []model.FilmVideoSlot
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("sequence_id = ?", sequence.ID).Find(&currentSlots).Error; err != nil {
+			return err
+		}
+		currentByID := make(map[string]model.FilmVideoSlot, len(currentSlots))
+		for _, slot := range currentSlots {
+			currentByID[slot.ID] = slot
+			if slot.Status == model.FilmVideoSlotStatusQueued || slot.Status == model.FilmVideoSlotStatusRunning {
+				return ErrFilmProductionActiveAttempt
+			}
+		}
+		if len(currentByID) != len(command.Slots) || len(command.OriginalSlots) != len(command.Slots) {
+			return ErrFilmProductionStateConflict
+		}
+		originalByID := make(map[string]model.FilmVideoSlot, len(command.OriginalSlots))
+		for _, slot := range command.OriginalSlots {
+			originalByID[slot.ID] = slot
+		}
+		seenSlots := make(map[string]bool, len(command.Slots))
+		for _, slot := range command.Slots {
+			current, ok := currentByID[slot.ID]
+			original, originalExists := originalByID[slot.ID]
+			if !ok || !originalExists || seenSlots[slot.ID] || slot.SequenceID != sequence.ID || slot.Position < 0 || slot.DurationMs < 1000 ||
+				slot.ShotID != current.ShotID || slot.Prompt != current.Prompt ||
+				slot.SourceImageAttemptID != current.SourceImageAttemptID || slot.SourceImageResultID != current.SourceImageResultID ||
+				slot.SourceImageResourceID != current.SourceImageResourceID || slot.SourceImageArtifactID != current.SourceImageArtifactID ||
+				slot.SourceImageRevisionID != current.SourceImageRevisionID || current.Position != original.Position || current.DurationMs != original.DurationMs ||
+				current.CurrentAttemptID != original.CurrentAttemptID || current.ResultID != original.ResultID || current.ResultArtifactID != original.ResultArtifactID ||
+				current.ResultRevisionID != original.ResultRevisionID || current.Status != original.Status || current.Revision != original.Revision {
+				return ErrFilmProductionStateConflict
+			}
+			seenSlots[slot.ID] = true
+		}
+		if len(seenSlots) != len(currentByID) {
+			return ErrFilmProductionStateConflict
+		}
+		if command.Continuity.ID == "" || command.Continuity.SequenceID != sequence.ID || command.Continuity.UserID != command.UserID || command.Continuity.ProjectID != command.ProjectID {
+			return ErrFilmProductionStateConflict
+		}
+		var currentLedger model.FilmContinuityLedger
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&currentLedger,
+			"id = ? AND sequence_id = ? AND project_id = ? AND user_id = ?", command.Continuity.ID, sequence.ID, command.ProjectID, command.UserID).Error; err != nil {
+			return err
+		}
+		if currentLedger.ArtifactID != command.ContinuityArtifact.ID || currentLedger.ArtifactRevisionID == command.ContinuityRevision.ID {
+			return ErrFilmProductionStateConflict
+		}
+		var sequenceArtifact model.ProductionArtifact
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&sequenceArtifact,
+			"id = ? AND user_id = ? AND project_id = ?", sequence.ArtifactID, command.UserID, command.ProjectID).Error; err != nil {
+			return err
+		}
+		if sequenceArtifact.CurrentRevisionID != sequence.ArtifactRevisionID {
+			return ErrProductionArtifactConflict
+		}
+		if _, _, err := createProductionArtifactRevisionTx(tx, ProductionArtifactRevisionCreate{
+			UserID: command.UserID, Artifact: command.Artifact, Revision: command.Revision,
+			ExpectedSequence: sequenceArtifact.RevisionSequence, At: now,
+		}); err != nil {
+			return err
+		}
+		var continuityArtifact model.ProductionArtifact
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&continuityArtifact,
+			"id = ? AND user_id = ? AND project_id = ?", currentLedger.ArtifactID, command.UserID, command.ProjectID).Error; err != nil {
+			return err
+		}
+		if continuityArtifact.CurrentRevisionID != currentLedger.ArtifactRevisionID {
+			return ErrProductionArtifactConflict
+		}
+		if _, _, err := createProductionArtifactRevisionTx(tx, ProductionArtifactRevisionCreate{
+			UserID: command.UserID, Artifact: command.ContinuityArtifact, Revision: command.ContinuityRevision,
+			ExpectedSequence: continuityArtifact.RevisionSequence, At: now,
+		}); err != nil {
+			return err
+		}
+
+		for index, slot := range currentSlots {
+			updated := tx.Model(&model.FilmVideoSlot{}).Where("id = ? AND sequence_id = ?", slot.ID, sequence.ID).Update("position", -1000-index)
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return ErrFilmProductionStateConflict
+			}
+		}
+		for index := range command.Slots {
+			slot := command.Slots[index]
+			updated := tx.Model(&model.FilmVideoSlot{}).Where("id = ? AND sequence_id = ?", slot.ID, sequence.ID).Updates(map[string]any{
+				"position": slot.Position, "duration_ms": slot.DurationMs, "current_attempt_id": slot.CurrentAttemptID,
+				"result_id": slot.ResultID, "result_artifact_id": slot.ResultArtifactID, "result_revision_id": slot.ResultRevisionID,
+				"status": slot.Status, "revision": slot.Revision, "updated_at": now,
+			})
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return ErrFilmProductionStateConflict
+			}
+		}
+		updatedSequence := tx.Model(&model.FilmVideoSequence{}).Where("id = ? AND revision = ?", sequence.ID, command.ExpectedRevision).Updates(map[string]any{
+			"title": command.Sequence.Title, "aspect_ratio": command.Sequence.AspectRatio, "target_duration_ms": command.Sequence.TargetDurationMs,
+			"music_resource_id": command.Sequence.MusicResourceID, "music_duration_ms": command.Sequence.MusicDurationMs,
+			"artifact_revision_id": command.Sequence.ArtifactRevisionID, "status": command.Sequence.Status,
+			"revision": command.Sequence.Revision, "updated_at": now,
+		})
+		if updatedSequence.Error != nil {
+			return updatedSequence.Error
+		}
+		if updatedSequence.RowsAffected != 1 {
+			return ErrFilmProductionStateConflict
+		}
+		updatedLedger := tx.Model(&model.FilmContinuityLedger{}).Where("id = ?", currentLedger.ID).Updates(map[string]any{
+			"media_state": command.Continuity.MediaState, "status": command.Continuity.Status, "issue_count": command.Continuity.IssueCount,
+			"source_artifact_refs": command.Continuity.SourceArtifactRefs, "artifact_revision_id": command.Continuity.ArtifactRevisionID,
+		})
+		if updatedLedger.Error != nil {
+			return updatedLedger.Error
+		}
+		if updatedLedger.RowsAffected != 1 {
+			return ErrFilmProductionStateConflict
+		}
+		stateIDs := make(map[string]bool, len(command.ContinuityShots))
+		for index, state := range command.ContinuityShots {
+			stateIDs[state.ID] = true
+			updated := tx.Model(&model.FilmContinuityShotState{}).Where("id = ? AND ledger_id = ?", state.ID, currentLedger.ID).Update("position", -1000-index)
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return ErrFilmProductionStateConflict
+			}
+		}
+		if len(stateIDs) != len(currentSlots) {
+			return ErrFilmProductionStateConflict
+		}
+		for _, state := range command.ContinuityShots {
+			updated := tx.Model(&model.FilmContinuityShotState{}).Where("id = ? AND ledger_id = ?", state.ID, currentLedger.ID).Updates(map[string]any{
+				"position": state.Position, "read_in_json": state.ReadInJSON, "write_out_json": state.WriteOutJSON,
+				"dimension_state_json": state.DimensionStateJSON, "reference_lock_json": state.ReferenceLockJSON, "status": state.Status,
+			})
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return ErrFilmProductionStateConflict
+			}
+		}
+		for _, issue := range command.ContinuityIssues {
+			updated := tx.Model(&model.FilmContinuityIssue{}).Where("id = ? AND ledger_id = ?", issue.ID, currentLedger.ID).Updates(map[string]any{
+				"shot_id": issue.ShotID, "dimension": issue.Dimension, "severity": issue.Severity, "code": issue.Code, "message": issue.Message,
+				"authority": issue.Authority, "owner": issue.Owner, "repair_status": issue.RepairStatus, "source_refs_json": issue.SourceRefsJSON,
+			})
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return ErrFilmProductionStateConflict
+			}
+		}
+		return appendFilmProductionEventTx(tx, root, command.Event, "", now)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return r.FilmVideoSequenceForUser(command.UserID, command.ProjectID, command.SequenceID)
 }
 
 func (r *Repository) FilmVideoSequenceForUser(userID string, projectID string, sequenceID string) (*FilmVideoSequenceDetail, error) {
@@ -487,6 +710,56 @@ func validateFilmVideoSequenceCreate(command FilmVideoSequenceCreateCommand) err
 			issue.LedgerID != command.Continuity.ID || strings.TrimSpace(issue.Code) == "" || strings.TrimSpace(issue.Owner) == "" {
 			return errors.New("Film continuity issue is incomplete")
 		}
+	}
+	return nil
+}
+
+func validateFilmVideoSequenceUpdate(command FilmVideoSequenceUpdateCommand) error {
+	if strings.TrimSpace(command.UserID) == "" || strings.TrimSpace(command.ProjectID) == "" || strings.TrimSpace(command.SequenceID) == "" ||
+		command.ExpectedRevision < 1 || command.ExpectedStatus == "" || command.Sequence == nil || command.Artifact == nil || command.Revision == nil || command.Continuity == nil ||
+		command.ContinuityArtifact == nil || command.ContinuityRevision == nil || len(command.Slots) == 0 || len(command.Slots) > maxFilmVideoSequenceSlots || len(command.OriginalSlots) != len(command.Slots) ||
+		len(command.ContinuityShots) != len(command.Slots) || len(command.ContinuityIssues) != command.Continuity.IssueCount ||
+		command.Sequence.ID != command.SequenceID || command.Sequence.UserID != command.UserID || command.Sequence.ProjectID != command.ProjectID ||
+		command.Sequence.Revision != command.ExpectedRevision+1 || command.Sequence.Status == model.FilmVideoSequenceStatusCompleted ||
+		command.Sequence.ArtifactID != command.Artifact.ID || command.Sequence.ArtifactRevisionID != command.Revision.ID ||
+		command.Revision.Status != model.ProductionArtifactStatusLocked || strings.TrimSpace(command.Revision.ContentDigest) == "" ||
+		command.Continuity.ID == "" || command.Continuity.UserID != command.UserID || command.Continuity.ProjectID != command.ProjectID ||
+		command.Continuity.SequenceID != command.SequenceID || command.Continuity.ArtifactID != command.ContinuityArtifact.ID ||
+		command.Continuity.ArtifactRevisionID != command.ContinuityRevision.ID || command.ContinuityRevision.Status != model.ProductionArtifactStatusLocked ||
+		strings.TrimSpace(command.ContinuityRevision.ContentDigest) == "" {
+		return errors.New("Film video sequence update identity is incomplete")
+	}
+	if err := validateAgentRuntimeEventInput(command.Event); err != nil {
+		return err
+	}
+	seenPositions := make(map[int]bool, len(command.Slots))
+	seenSlots := make(map[string]bool, len(command.Slots))
+	for _, slot := range command.Slots {
+		if strings.TrimSpace(slot.ID) == "" || seenSlots[slot.ID] || slot.SequenceID != command.SequenceID || slot.Position < 0 || seenPositions[slot.Position] ||
+			slot.DurationMs < 1000 || slot.Revision < 1 || strings.TrimSpace(slot.ShotID) == "" || strings.TrimSpace(slot.Prompt) == "" ||
+			strings.TrimSpace(slot.SourceImageAttemptID) == "" || strings.TrimSpace(slot.SourceImageResultID) == "" || strings.TrimSpace(slot.SourceImageResourceID) == "" ||
+			strings.TrimSpace(slot.SourceImageArtifactID) == "" || strings.TrimSpace(slot.SourceImageRevisionID) == "" {
+			return errors.New("Film video sequence update slot identity is incomplete")
+		}
+		seenSlots[slot.ID] = true
+		seenPositions[slot.Position] = true
+	}
+	seenStates := make(map[string]bool, len(command.ContinuityShots))
+	for _, state := range command.ContinuityShots {
+		if strings.TrimSpace(state.ID) == "" || seenStates[state.ID] || state.UserID != command.UserID || state.ProjectID != command.ProjectID ||
+			state.SequenceID != command.SequenceID || state.LedgerID != command.Continuity.ID || state.Position < 0 || strings.TrimSpace(state.ReadInJSON) == "" ||
+			strings.TrimSpace(state.WriteOutJSON) == "" || strings.TrimSpace(state.DimensionStateJSON) == "" || strings.TrimSpace(state.ReferenceLockJSON) == "" {
+			return errors.New("Film continuity sequence update state is incomplete")
+		}
+		seenStates[state.ID] = true
+	}
+	seenIssues := make(map[string]bool, len(command.ContinuityIssues))
+	for _, issue := range command.ContinuityIssues {
+		if strings.TrimSpace(issue.ID) == "" || seenIssues[issue.ID] || issue.UserID != command.UserID || issue.ProjectID != command.ProjectID ||
+			issue.SequenceID != command.SequenceID || issue.LedgerID != command.Continuity.ID || strings.TrimSpace(issue.Code) == "" || strings.TrimSpace(issue.Owner) == "" {
+			return errors.New("Film continuity sequence update issue is incomplete")
+		}
+		seenIssues[issue.ID] = true
 	}
 	return nil
 }

@@ -277,9 +277,22 @@ export type FilmVideoSequenceInput = {
     title?: string;
     aspectRatio: string;
     targetDurationMs: number;
+    musicResourceId?: string;
     slots: Array<{
         shotId: string;
         sourceImageAttemptId: string;
+        durationMs: number;
+    }>;
+};
+
+export type FilmVideoSequenceUpdateInput = {
+    expectedRevision: number;
+    title?: string;
+    aspectRatio?: string;
+    targetDurationMs: number;
+    musicResourceId?: string;
+    slots: Array<{
+        slotId: string;
         durationMs: number;
     }>;
 };
@@ -291,6 +304,8 @@ export type FilmVideoSequence = {
     title: string;
     aspectRatio: string;
     targetDurationMs: number;
+    musicResourceId?: string;
+    musicDurationMs?: number;
     promptArtifactId: string;
     promptArtifactRevisionId: string;
     promptArtifactDigest: string;
@@ -736,6 +751,10 @@ export function createFilmVideoSequence(projectId: string, input: FilmVideoSeque
 
 export function listFilmVideoSequences(projectId: string, options: { rootRunId?: string; limit?: number } = {}) {
     return request<{ sequences: FilmVideoSequenceView[] }>(api.get(`${projectPath(projectId)}/video-sequences`, { params: options }));
+}
+
+export function updateFilmVideoSequence(projectId: string, sequenceId: string, input: FilmVideoSequenceUpdateInput) {
+    return request<FilmVideoSequenceView>(api.patch(`${projectPath(projectId)}/video-sequences/${encodeURIComponent(sequenceId)}`, input));
 }
 
 export function createFilmVideoSequenceReview(projectId: string, sequenceId: string, input: FilmVideoSequenceReviewInput, idempotencyKey?: string) {

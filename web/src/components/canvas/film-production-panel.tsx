@@ -33,6 +33,7 @@ import {
     type FilmVideoSequenceView,
 } from "@/services/api/film-production";
 import { listLogicalModels, type PublicLogicalModel } from "@/services/api/logical-models";
+import { resourceIdFromStorageKey } from "@/services/api/resources";
 import type { ProjectDetail } from "@/services/api/projects";
 import { latestFilmAttemptsByShot, normalizeFilmBatchShotIds, summarizeFilmBatch, type FilmBatchQuoteItem } from "@/lib/canvas/film-batch-production";
 import { collectLockedFilmInputRevisionIds, FILM_AUTO_INTENT_ROUTE, filmIntentSelection } from "@/lib/canvas/film-intent-routing";
@@ -81,6 +82,14 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
     const [batchSubmitting, setBatchSubmitting] = useState(false);
     const [selectedAttemptId, setSelectedAttemptId] = useState("");
     const [qcNote, setQcNote] = useState("");
+    const audioOptions = useMemo(
+        () =>
+            project.assets
+                .filter((asset) => asset.mediaType === "audio")
+                .map((asset) => ({ value: resourceIdFromStorageKey(asset.storageKey), label: asset.title || asset.id }))
+                .filter((item) => item.value),
+        [project.assets],
+    );
     const runKeyRef = useRef({ signature: "", key: "" });
     const quoteKeyRef = useRef({ signature: "", key: "" });
     const submitKeyRef = useRef({ signature: "", key: "" });
@@ -626,6 +635,7 @@ export function FilmProductionPanel({ projectId, canvasId, project, referenceRes
                             imageAttempts={attempts}
                             videoModels={videoModels}
                             visualQCModels={visualQCModels}
+                            audioOptions={audioOptions}
                             promptRevision={videoPromptRevision}
                             onProductionChanged={invalidateProduction}
                             onImportSequence={onImportVideoSequence}

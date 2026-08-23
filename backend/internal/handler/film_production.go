@@ -171,6 +171,25 @@ func RegisterFilmProductionRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, gin.H{"sequences": sequences})
 	})
+	production.PATCH("/video-sequences/:sequenceId", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, filmProductionQuoteRequestLimit)
+		var request service.UpdateFilmVideoSequenceRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			failFilmProductionBind(c, err)
+			return
+		}
+		sequence, err := svc.UpdateFilmVideoSequence(user.ID, c.Param("id"), c.Param("sequenceId"), request)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, sequence)
+	})
 	production.POST("/video-sequences/:sequenceId/review", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

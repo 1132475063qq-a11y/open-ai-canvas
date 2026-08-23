@@ -1,14 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Checkbox, Input, Modal, Select, Tag } from "antd";
-import { AlertTriangle, Check, Coins, Film, ListChecks, ListVideo, RotateCcw, Square } from "lucide-react";
+import { Alert, Button, Checkbox, Input, InputNumber, Modal, Select, Tag, Tooltip } from "antd";
+import { AlertTriangle, ArrowDown, ArrowUp, Check, Coins, Film, ListChecks, ListVideo, Music2, RotateCcw, Square } from "lucide-react";
 
 import { formatCredits } from "@/constant/credits";
 import { FilmVideoVisualQCSection } from "@/components/canvas/film-video-visual-qc-section";
 import { FilmVideoSequenceVisualQCSection } from "@/components/canvas/film-video-sequence-visual-qc-section";
 import { createClientId } from "@/lib/client-id";
 import type { FilmProductionArtifactRevision } from "@/services/api/film-agent-runtime";
-import { createFilmVideoHumanQC, createFilmVideoQuote, createFilmVideoSequence, createFilmVideoSequenceReview, listFilmVideoSequences, submitFilmVideoQuote, type FilmProductionAttemptView, type FilmVideoQuote, type FilmVideoSequenceView } from "@/services/api/film-production";
+import {
+    createFilmVideoHumanQC,
+    createFilmVideoQuote,
+    createFilmVideoSequence,
+    createFilmVideoSequenceReview,
+    listFilmVideoSequences,
+    submitFilmVideoQuote,
+    updateFilmVideoSequence,
+    type FilmProductionAttemptView,
+    type FilmVideoQuote,
+    type FilmVideoSequenceView,
+} from "@/services/api/film-production";
 import { canImportFilmVideoSequence } from "@/lib/timeline/film-video-sequence";
 import { cancelGenerationTask } from "@/services/api/task-center";
 import type { PublicLogicalModel } from "@/services/api/logical-models";
@@ -21,6 +32,7 @@ type FilmVideoProductionSectionProps = {
     imageAttempts: FilmProductionAttemptView[];
     videoModels: PublicLogicalModel[];
     visualQCModels: PublicLogicalModel[];
+    audioOptions: Array<{ value: string; label: string }>;
     promptRevision?: FilmProductionArtifactRevision;
     onProductionChanged: () => void;
     onImportSequence?: (sequence: FilmVideoSequenceView) => void;
@@ -42,12 +54,17 @@ function defaultContinuityChecks() {
     return Object.fromEntries(CONTINUITY_DIMENSIONS.map(([key]) => [key, true])) as Record<(typeof CONTINUITY_DIMENSIONS)[number][0], boolean>;
 }
 
-export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageAttempts, videoModels, visualQCModels, promptRevision, onProductionChanged, onImportSequence }: FilmVideoProductionSectionProps) {
+export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageAttempts, videoModels, visualQCModels, audioOptions, promptRevision, onProductionChanged, onImportSequence }: FilmVideoProductionSectionProps) {
     const queryClient = useQueryClient();
     const [selectedImageAttemptIds, setSelectedImageAttemptIds] = useState<string[]>([]);
     const [sequenceId, setSequenceId] = useState("");
     const [slotId, setSlotId] = useState("");
     const [videoModelId, setVideoModelId] = useState("");
+    const [musicResourceId, setMusicResourceId] = useState("");
+    const [durationByAttemptId, setDurationByAttemptId] = useState<Record<string, number>>({});
+    const [editSequenceOrderIds, setEditSequenceOrderIds] = useState<string[]>([]);
+    const [editDurationBySlotId, setEditDurationBySlotId] = useState<Record<string, number>>({});
+    const [editMusicResourceId, setEditMusicResourceId] = useState("");
     const [quote, setQuote] = useState<FilmVideoQuote | null>(null);
     const [confirmSubmit, setConfirmSubmit] = useState(false);
     const [qcNote, setQcNote] = useState("");
@@ -69,6 +86,10 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
     );
     const acceptedById = useMemo(() => new Map(acceptedImages.map((item) => [item.attempt.id, item])), [acceptedImages]);
     const shotById = useMemo(() => new Map(shots.map((shot) => [shot.id, shot])), [shots]);
+    const selectedDurationMs = useMemo(
+        () => selectedImageAttemptIds.reduce((total, id) => total + normalizeVideoSlotDuration(durationByAttemptId[id], shotById.get(acceptedById.get(id)?.attempt.shotId || "")?.durationMs), 0),
+        [acceptedById, durationByAttemptId, selectedImageAttemptIds, shotById],
+    );
     const sequencesQuery = useQuery({
         queryKey: ["film-video-sequences", projectId, rootRunId],
         queryFn: () => listFilmVideoSequences(projectId, { rootRunId, limit: 50 }),
@@ -82,13 +103,28 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
     const selectedModel = videoModels.find((model) => model.id === videoModelId);
     const resolution = resolveFilmVideoResolution(selectedModel);
     const canCreateSequence = Boolean(rootRunId && promptRevision?.status === "locked" && selectedImageAttemptIds.length);
+    const sequenceDurationValid = selectedDurationMs >= 1_000 && selectedDurationMs <= 120_000;
     const sequenceRepairAllowed = Boolean(selectedSequence?.sequenceReview?.valid && selectedSequence.sequenceReview.decision === "FAIL" && selectedSequence.sequenceReview.action === "retry" && latestAttempt?.accepted);
-    const canQuote = Boolean(selectedSlot && videoModelId && (!latestAttempt || latestAttempt.retryAllowed || sequenceRepairAllowed));
+    const canQuote = Boolean(selectedSlot && videoModelId && (selectedSlot.slot.status === "ready" || !latestAttempt || latestAttempt.retryAllowed || sequenceRepairAllowed));
     const canReview = latestAttempt?.attempt.status === "succeeded" && !latestAttempt.accepted;
     const systemTechnicalFailure = latestAttempt?.qcReports.some((report) => report.source === "system" && report.assessmentKind === "technical_media_qc" && report.decision === "FAIL");
     const allVideoSlotsAccepted = Boolean(selectedSequence?.slots.length && selectedSequence.slots.every((item) => item.slot.status === "accepted" && item.attempts.some((attempt) => attempt.accepted && attempt.result?.url)));
     const canImportSequence = Boolean(selectedSequence && canImportFilmVideoSequence(selectedSequence));
+    const sequenceEditingBlocked = Boolean(selectedSequence?.slots.some((item) => item.slot.status === "queued" || item.slot.status === "running"));
     const selectedRework = selectedSequence?.reworkEvents.find((event) => event.slotId === selectedSlot?.slot.id && event.attemptId === latestAttempt?.attempt.id && event.status === "open");
+    const editSlots = useMemo(
+        () => editSequenceOrderIds.map((id) => selectedSequence?.slots.find((item) => item.slot.id === id)).filter((item): item is NonNullable<typeof selectedSequence>["slots"][number] => Boolean(item)),
+        [editSequenceOrderIds, selectedSequence],
+    );
+    const editDurationMs = useMemo(() => editSlots.reduce((total, item) => total + normalizeVideoSlotDuration(editDurationBySlotId[item.slot.id], item.slot.durationMs), 0), [editDurationBySlotId, editSlots]);
+    const editDurationValid = editDurationMs >= 1_000 && editDurationMs <= 120_000;
+    const persistedSequenceOrderIds = useMemo(() => (selectedSequence ? [...selectedSequence.slots].sort((left, right) => left.slot.position - right.slot.position).map((item) => item.slot.id) : []), [selectedSequence]);
+    const editPlanDirty = Boolean(
+        selectedSequence &&
+        (editMusicResourceId !== (selectedSequence.sequence.musicResourceId || "") ||
+            editSequenceOrderIds.some((id, index) => persistedSequenceOrderIds[index] !== id) ||
+            editSlots.some((item) => normalizeVideoSlotDuration(editDurationBySlotId[item.slot.id], item.slot.durationMs) !== item.slot.durationMs)),
+    );
 
     const invalidateVideo = () => {
         void queryClient.invalidateQueries({ queryKey: ["film-video-sequences", projectId] });
@@ -105,6 +141,11 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
         setSequenceId("");
         setSlotId("");
         setSelectedImageAttemptIds([]);
+        setMusicResourceId("");
+        setDurationByAttemptId({});
+        setEditSequenceOrderIds([]);
+        setEditDurationBySlotId({});
+        setEditMusicResourceId("");
         setSequenceReviewNote("");
         setContinuityChecks(defaultContinuityChecks());
         clearQuote();
@@ -120,12 +161,36 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
             for (const item of acceptedImages) {
                 if (!latestByShot.has(item.attempt.shotId)) latestByShot.set(item.attempt.shotId, item.attempt.id);
             }
-            return [...latestByShot.values()];
+            return [...latestByShot.entries()].sort(([leftShotId], [rightShotId]) => (shotById.get(leftShotId)?.position || 0) - (shotById.get(rightShotId)?.position || 0)).map(([, attemptId]) => attemptId);
         });
-    }, [acceptedById, acceptedImages]);
+    }, [acceptedById, acceptedImages, shotById]);
+    useEffect(() => {
+        setDurationByAttemptId((current) => {
+            const next = { ...current };
+            for (const item of acceptedImages) {
+                if (!Number.isFinite(next[item.attempt.id])) next[item.attempt.id] = normalizeShotDuration(shotById.get(item.attempt.shotId)?.durationMs);
+            }
+            for (const id of Object.keys(next)) {
+                if (!acceptedById.has(id)) delete next[id];
+            }
+            return next;
+        });
+    }, [acceptedById, acceptedImages, shotById]);
     useEffect(() => {
         if (!sequenceId && sequences.length) setSequenceId(sequences[0].sequence.id);
     }, [sequenceId, sequences]);
+    useEffect(() => {
+        if (!selectedSequence) {
+            setEditSequenceOrderIds([]);
+            setEditDurationBySlotId({});
+            setEditMusicResourceId("");
+            return;
+        }
+        const ordered = [...selectedSequence.slots].sort((left, right) => left.slot.position - right.slot.position);
+        setEditSequenceOrderIds(ordered.map((item) => item.slot.id));
+        setEditDurationBySlotId(Object.fromEntries(ordered.map((item) => [item.slot.id, item.slot.durationMs])));
+        setEditMusicResourceId(selectedSequence.sequence.musicResourceId || "");
+    }, [selectedSequence?.sequence.revision, sequenceId]);
     useEffect(() => {
         if (selectedSequence && !selectedSequence.slots.some((item) => item.slot.id === slotId)) {
             setSlotId(selectedSequence.slots[0]?.slot.id || "");
@@ -154,14 +219,11 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
 
     const createSequenceMutation = useMutation({
         mutationFn: () => {
-            const selected = selectedImageAttemptIds
-                .map((id) => acceptedById.get(id))
-                .filter((item): item is FilmProductionAttemptView => Boolean(item))
-                .sort((left, right) => (shotById.get(left.attempt.shotId)?.position || 0) - (shotById.get(right.attempt.shotId)?.position || 0));
+            const selected = selectedImageAttemptIds.map((id) => acceptedById.get(id)).filter((item): item is FilmProductionAttemptView => Boolean(item));
             const slots = selected.map((item) => ({
                 shotId: item.attempt.shotId,
                 sourceImageAttemptId: item.attempt.id,
-                durationMs: normalizeShotDuration(shotById.get(item.attempt.shotId)?.durationMs),
+                durationMs: normalizeVideoSlotDuration(durationByAttemptId[item.attempt.id], shotById.get(item.attempt.shotId)?.durationMs),
             }));
             const targetDurationMs = slots.reduce((total, slot) => total + slot.durationMs, 0);
             const input = {
@@ -170,6 +232,7 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
                 title: `9:16 短剧视频 · ${slots.length} 镜头`,
                 aspectRatio: "9:16",
                 targetDurationMs,
+                ...(musicResourceId ? { musicResourceId } : {}),
                 slots,
             };
             return createFilmVideoSequence(projectId, input, stableOperationKey(sequenceKeyRef, "film-video-sequence", JSON.stringify(input)));
@@ -181,13 +244,30 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
             invalidateVideo();
         },
     });
+    const updateSequenceMutation = useMutation({
+        mutationFn: () =>
+            updateFilmVideoSequence(projectId, selectedSequence!.sequence.id, {
+                expectedRevision: selectedSequence!.sequence.revision,
+                title: selectedSequence!.sequence.title,
+                aspectRatio: selectedSequence!.sequence.aspectRatio,
+                targetDurationMs: editDurationMs,
+                musicResourceId: editMusicResourceId,
+                slots: editSlots.map((item) => ({ slotId: item.slot.id, durationMs: normalizeVideoSlotDuration(editDurationBySlotId[item.slot.id], item.slot.durationMs) })),
+            }),
+        onSuccess: (result) => {
+            setSequenceId(result.sequence.id);
+            setSlotId(result.slots[0]?.slot.id || "");
+            clearQuote();
+            invalidateVideo();
+        },
+    });
     const quoteMutation = useMutation({
         mutationFn: () => {
             const input = {
                 sequenceId: selectedSequence!.sequence.id,
                 slotId: selectedSlot!.slot.id,
                 logicalModelId: videoModelId,
-                ...(latestAttempt?.retryAllowed || sequenceRepairAllowed ? { retryOfAttemptId: latestAttempt!.attempt.id } : {}),
+                ...(selectedSlot!.slot.status !== "ready" && (latestAttempt?.retryAllowed || sequenceRepairAllowed) ? { retryOfAttemptId: latestAttempt!.attempt.id } : {}),
                 options: { ...(resolution ? { resolution } : {}) },
             };
             return createFilmVideoQuote(projectId, input, stableOperationKey(quoteKeyRef, "film-video-quote", JSON.stringify(input)));
@@ -215,7 +295,9 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
             const action = decision === "PASS" ? "accept" : decision === "UNCERTAIN" ? "hold" : "retry";
             const dimensions = Object.fromEntries(Object.entries(continuityChecks).map(([key, passed]) => [key, passed ? "PASS" : decision === "UNCERTAIN" ? "UNCERTAIN" : "FAIL"]));
             const shots = Object.fromEntries((selectedSequence?.slots || []).map((item) => [item.slot.shotId, "PASS"]));
-            const failedDimensions = Object.entries(continuityChecks).filter(([, passed]) => !passed).map(([key]) => `CONTINUITY_${key.toUpperCase()}`);
+            const failedDimensions = Object.entries(continuityChecks)
+                .filter(([, passed]) => !passed)
+                .map(([key]) => `CONTINUITY_${key.toUpperCase()}`);
             const issueCodes = decision === "PASS" ? [] : failedDimensions.length ? failedDimensions : [decision === "UNCERTAIN" ? "CONTINUITY_REVIEW_PENDING" : "SEQUENCE_REVIEW_FAILED"];
             const input = { decision, action, issueCodes, evidence: { dimensions, shots }, note: sequenceReviewNote } as const;
             return createFilmVideoSequenceReview(projectId, selectedSequence!.sequence.id, input, stableOperationKey(sequenceReviewKeyRef, "film-video-sequence-review", JSON.stringify([selectedSequence!.sequence.id, input])));
@@ -231,7 +313,7 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
         onSuccess: invalidateVideo,
     });
 
-    const mutationError = createSequenceMutation.error || quoteMutation.error || submitMutation.error || qcMutation.error || sequenceReviewMutation.error || cancelMutation.error;
+    const mutationError = createSequenceMutation.error || updateSequenceMutation.error || quoteMutation.error || submitMutation.error || qcMutation.error || sequenceReviewMutation.error || cancelMutation.error;
 
     return (
         <section className="space-y-2">
@@ -251,14 +333,75 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
                     label: `${shotLabel(shots, item.attempt.shotId)} · 图片 #${item.attempt.number}`,
                 }))}
             />
+            {selectedImageAttemptIds.length ? (
+                <div className="space-y-1.5 rounded-lg p-2.5" style={{ background: "var(--library-surface)" }}>
+                    <div className="flex items-center justify-between gap-2 text-xs font-semibold">
+                        <span className="flex items-center gap-1.5">
+                            <ListVideo className="size-3.5" style={{ color: "var(--primary)" }} />
+                            镜头顺序与时长
+                        </span>
+                        <span className="tabular-nums" style={{ color: "var(--foreground-muted)" }}>
+                            {selectedDurationMs / 1_000}s
+                        </span>
+                    </div>
+                    {selectedImageAttemptIds.map((id, index) => {
+                        const item = acceptedById.get(id);
+                        if (!item) return null;
+                        const shot = shotById.get(item.attempt.shotId);
+                        const durationMs = normalizeVideoSlotDuration(durationByAttemptId[id], shot?.durationMs);
+                        return (
+                            <div key={id} className="flex items-center gap-1.5 border-t pt-1.5 text-xs" style={{ borderColor: "var(--border)" }}>
+                                <span className="w-4 shrink-0 text-center tabular-nums" style={{ color: "var(--foreground-muted)" }}>
+                                    {index + 1}
+                                </span>
+                                <span className="min-w-0 flex-1 truncate">{shot ? shot.title : item.attempt.shotId.slice(0, 8)}</span>
+                                <InputNumber
+                                    size="small"
+                                    min={1}
+                                    max={30}
+                                    precision={0}
+                                    value={durationMs / 1_000}
+                                    addonAfter="秒"
+                                    onChange={(value) => setDurationByAttemptId((current) => ({ ...current, [id]: normalizeVideoSlotDuration(typeof value === "number" ? value * 1_000 : undefined, shot?.durationMs) }))}
+                                />
+                                <Tooltip title="上移">
+                                    <Button type="text" size="small" icon={<ArrowUp className="size-3.5" />} disabled={index === 0} aria-label="上移镜头" onClick={() => setSelectedImageAttemptIds((current) => moveItem(current, index, index - 1))} />
+                                </Tooltip>
+                                <Tooltip title="下移">
+                                    <Button
+                                        type="text"
+                                        size="small"
+                                        icon={<ArrowDown className="size-3.5" />}
+                                        disabled={index === selectedImageAttemptIds.length - 1}
+                                        aria-label="下移镜头"
+                                        onClick={() => setSelectedImageAttemptIds((current) => moveItem(current, index, index + 1))}
+                                    />
+                                </Tooltip>
+                            </div>
+                        );
+                    })}
+                </div>
+            ) : null}
             <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-md border px-2 py-1.5 text-xs" style={{ borderColor: "var(--border)", color: "var(--foreground-muted)" }}>
-                    9:16 · {selectedImageAttemptIds.reduce((total, id) => total + normalizeShotDuration(shotById.get(acceptedById.get(id)?.attempt.shotId || "")?.durationMs), 0) / 1_000}s
+                    9:16 · {selectedDurationMs / 1_000}s
                 </div>
-                <Button type="primary" icon={<Film className="size-3.5" />} disabled={!canCreateSequence} loading={createSequenceMutation.isPending} onClick={() => createSequenceMutation.mutate()}>
+                <Button type="primary" icon={<Film className="size-3.5" />} disabled={!canCreateSequence || !sequenceDurationValid} loading={createSequenceMutation.isPending} onClick={() => createSequenceMutation.mutate()}>
                     创建序列
                 </Button>
             </div>
+            <Select
+                allowClear
+                showSearch
+                className="w-full"
+                value={musicResourceId || undefined}
+                options={audioOptions}
+                optionFilterProp="label"
+                placeholder="基础音乐（可选）"
+                suffixIcon={<Music2 className="size-3.5" />}
+                onChange={(value) => setMusicResourceId(value || "")}
+            />
+            {selectedDurationMs > 120_000 ? <InlineNotice text="视频序列总时长不能超过 120 秒" /> : null}
             {!acceptedImages.length ? <InlineNotice text="通过图片人工验收后，可创建视频序列" /> : promptRevision?.status !== "locked" ? <InlineNotice text="缺少已锁定的逐镜视频 Prompt" /> : null}
             {sequences.length ? (
                 <div className="space-y-2">
@@ -285,10 +428,77 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
                             options={(selectedSequence?.slots || []).map((item) => ({ value: item.slot.id, label: `${item.slot.position + 1}. ${shotLabel(shots, item.slot.shotId)} · ${item.slot.status}` }))}
                         />
                     </div>
-                    {selectedSequence?.continuity ? <ContinuityState sequence={selectedSequence} shots={shots} /> : null}
-                    {selectedSequence?.continuity && allVideoSlotsAccepted ? (
-                        <FilmVideoSequenceVisualQCSection projectId={projectId} sequence={selectedSequence} models={visualQCModels} onChanged={invalidateVideo} />
+                    {selectedSequence ? (
+                        <div className="space-y-2 rounded-lg p-2.5" style={{ background: "var(--library-surface)" }}>
+                            <div className="flex items-center justify-between gap-2 text-xs font-semibold">
+                                <span className="flex items-center gap-1.5">
+                                    <ListVideo className="size-3.5" style={{ color: "var(--primary)" }} />
+                                    编排版本 v{selectedSequence.sequence.revision}
+                                </span>
+                                <span className="tabular-nums" style={{ color: editDurationValid ? "var(--foreground-muted)" : "var(--error)" }}>
+                                    {editDurationMs / 1_000}s
+                                </span>
+                            </div>
+                            {editSlots.map((item, index) => {
+                                const durationMs = normalizeVideoSlotDuration(editDurationBySlotId[item.slot.id], item.slot.durationMs);
+                                return (
+                                    <div key={item.slot.id} className="flex items-center gap-1.5 border-t pt-1.5 text-xs" style={{ borderColor: "var(--border)" }}>
+                                        <span className="w-4 shrink-0 text-center tabular-nums" style={{ color: "var(--foreground-muted)" }}>
+                                            {index + 1}
+                                        </span>
+                                        <span className="min-w-0 flex-1 truncate">{shotLabel(shots, item.slot.shotId)}</span>
+                                        <InputNumber
+                                            size="small"
+                                            min={1}
+                                            max={30}
+                                            precision={0}
+                                            value={durationMs / 1_000}
+                                            addonAfter="秒"
+                                            onChange={(value) => setEditDurationBySlotId((current) => ({ ...current, [item.slot.id]: normalizeVideoSlotDuration(typeof value === "number" ? value * 1_000 : undefined, item.slot.durationMs) }))}
+                                        />
+                                        <Tooltip title="上移">
+                                            <Button
+                                                type="text"
+                                                size="small"
+                                                icon={<ArrowUp className="size-3.5" />}
+                                                disabled={index === 0}
+                                                aria-label="上移已创建镜头"
+                                                onClick={() => setEditSequenceOrderIds((current) => moveItem(current, index, index - 1))}
+                                            />
+                                        </Tooltip>
+                                        <Tooltip title="下移">
+                                            <Button
+                                                type="text"
+                                                size="small"
+                                                icon={<ArrowDown className="size-3.5" />}
+                                                disabled={index === editSlots.length - 1}
+                                                aria-label="下移已创建镜头"
+                                                onClick={() => setEditSequenceOrderIds((current) => moveItem(current, index, index + 1))}
+                                            />
+                                        </Tooltip>
+                                    </div>
+                                );
+                            })}
+                            <Select
+                                allowClear
+                                showSearch
+                                className="w-full"
+                                value={editMusicResourceId || undefined}
+                                options={audioOptions}
+                                optionFilterProp="label"
+                                placeholder="基础音乐（可选）"
+                                suffixIcon={<Music2 className="size-3.5" />}
+                                onChange={(value) => setEditMusicResourceId(value || "")}
+                            />
+                            {!editDurationValid ? <InlineNotice text="视频序列总时长必须在 1-120 秒之间" /> : null}
+                            {sequenceEditingBlocked ? <InlineNotice text="镜头正在生成，任务结束后才能保存新编排版本" /> : null}
+                            <Button block icon={<Check className="size-3.5" />} disabled={!editPlanDirty || !editDurationValid || sequenceEditingBlocked} loading={updateSequenceMutation.isPending} onClick={() => updateSequenceMutation.mutate()}>
+                                保存编排并创建新版本
+                            </Button>
+                        </div>
                     ) : null}
+                    {selectedSequence?.continuity ? <ContinuityState sequence={selectedSequence} shots={shots} /> : null}
+                    {selectedSequence?.continuity && allVideoSlotsAccepted ? <FilmVideoSequenceVisualQCSection projectId={projectId} sequence={selectedSequence} models={visualQCModels} onChanged={invalidateVideo} /> : null}
                     {selectedSequence?.continuity ? (
                         <SequenceReviewPanel
                             sequence={selectedSequence}
@@ -327,9 +537,7 @@ export function FilmVideoProductionSection({ projectId, rootRunId, shots, imageA
                     {latestAttempt?.result?.url ? <video className="mx-auto max-h-72 w-full bg-black object-contain" style={{ aspectRatio: "9 / 16" }} controls preload="metadata" src={latestAttempt.result.url} /> : null}
                     {latestAttempt ? <AttemptState attempt={latestAttempt} onCancel={() => cancelMutation.mutate()} cancelling={cancelMutation.isPending} /> : null}
                     {latestAttempt?.currentQc ? <VideoQCState qc={latestAttempt.currentQc} /> : null}
-                    {latestAttempt?.attempt.status === "succeeded" && latestAttempt.result?.url ? (
-                        <FilmVideoVisualQCSection projectId={projectId} attempt={latestAttempt} models={visualQCModels} onChanged={invalidateVideo} />
-                    ) : null}
+                    {latestAttempt?.attempt.status === "succeeded" && latestAttempt.result?.url ? <FilmVideoVisualQCSection projectId={projectId} attempt={latestAttempt} models={visualQCModels} onChanged={invalidateVideo} /> : null}
                     {selectedRework ? (
                         <div className="flex items-start gap-1.5 text-xs text-red-600">
                             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
@@ -395,7 +603,9 @@ function ContinuityState({ sequence, shots }: { sequence: FilmVideoSequenceView;
                 {continuity.issues.slice(0, 4).map((issue) => (
                     <div key={issue.id} className="flex items-start gap-1.5">
                         <AlertTriangle className="mt-0.5 size-3 shrink-0 text-amber-500" />
-                        <span>{shotLabel(shots, issue.shotId || "")}：{issue.message}</span>
+                        <span>
+                            {shotLabel(shots, issue.shotId || "")}：{issue.message}
+                        </span>
                     </div>
                 ))}
                 {continuity.issues.length > 4 ? <span style={{ color: "var(--foreground-muted)" }}>另有 {continuity.issues.length - 4} 项逐镜记录</span> : null}
@@ -425,12 +635,15 @@ function SequenceReviewPanel({
 }) {
     const review = sequence.sequenceReview;
     const allDimensionsPassed = CONTINUITY_DIMENSIONS.every(([key]) => checks[key]);
-    const reviewLabel = review?.valid ? review.decision === "PASS" ? "整组已通过" : review.decision === "FAIL" ? "整组未通过" : "整组待复核" : review ? "整组裁决已过期" : "尚未整组裁决";
-    const reviewTone = review?.valid ? review.decision === "PASS" ? "success" : review.decision === "FAIL" ? "error" : "warning" : "default";
+    const reviewLabel = review?.valid ? (review.decision === "PASS" ? "整组已通过" : review.decision === "FAIL" ? "整组未通过" : "整组待复核") : review ? "整组裁决已过期" : "尚未整组裁决";
+    const reviewTone = review?.valid ? (review.decision === "PASS" ? "success" : review.decision === "FAIL" ? "error" : "warning") : "default";
     return (
         <div className="space-y-2 border-t pt-2" style={{ borderColor: "var(--border)" }}>
             <div className="flex items-center justify-between gap-2 text-xs font-semibold">
-                <span className="flex items-center gap-1.5"><ListChecks className="size-3.5" style={{ color: "var(--primary)" }} />跨镜头连续性</span>
+                <span className="flex items-center gap-1.5">
+                    <ListChecks className="size-3.5" style={{ color: "var(--primary)" }} />
+                    跨镜头连续性
+                </span>
                 <Tag color={reviewTone}>{reviewLabel}</Tag>
             </div>
             <div className="grid grid-cols-2 gap-x-2 gap-y-1">
@@ -440,16 +653,30 @@ function SequenceReviewPanel({
                     </Checkbox>
                 ))}
             </div>
-            {review?.valid && review.note ? <div className="text-xs" style={{ color: "var(--foreground-muted)" }}>{review.note}</div> : null}
+            {review?.valid && review.note ? (
+                <div className="text-xs" style={{ color: "var(--foreground-muted)" }}>
+                    {review.note}
+                </div>
+            ) : null}
             {review && !review.valid ? <div className="text-xs text-amber-600">槽位或版本已变化，需要重新进行整组裁决。</div> : null}
-            {!allSlotsAccepted ? <div className="text-xs" style={{ color: "var(--foreground-muted)" }}>全部视频槽位接受后，整组裁决才可提交。</div> : null}
+            {!allSlotsAccepted ? (
+                <div className="text-xs" style={{ color: "var(--foreground-muted)" }}>
+                    全部视频槽位接受后，整组裁决才可提交。
+                </div>
+            ) : null}
             {allSlotsAccepted ? (
                 <>
                     <Input.TextArea value={note} onChange={(event) => onNote(event.target.value)} autoSize={{ minRows: 1, maxRows: 3 }} placeholder="整组验收备注" disabled={loading} />
                     <div className="grid grid-cols-3 gap-2">
-                        <Button size="small" type="primary" icon={<Check className="size-3" />} disabled={!allDimensionsPassed} loading={loading} onClick={() => onReview("PASS")}>整组通过</Button>
-                        <Button size="small" icon={<AlertTriangle className="size-3" />} loading={loading} onClick={() => onReview("UNCERTAIN")}>待复核</Button>
-                        <Button size="small" danger icon={<RotateCcw className="size-3" />} loading={loading} onClick={() => onReview("FAIL")}>整组重做</Button>
+                        <Button size="small" type="primary" icon={<Check className="size-3" />} disabled={!allDimensionsPassed} loading={loading} onClick={() => onReview("PASS")}>
+                            整组通过
+                        </Button>
+                        <Button size="small" icon={<AlertTriangle className="size-3" />} loading={loading} onClick={() => onReview("UNCERTAIN")}>
+                            待复核
+                        </Button>
+                        <Button size="small" danger icon={<RotateCcw className="size-3" />} loading={loading} onClick={() => onReview("FAIL")}>
+                            整组重做
+                        </Button>
                     </div>
                 </>
             ) : null}
@@ -465,7 +692,9 @@ function VideoQCState({ qc }: { qc: NonNullable<FilmVideoSequenceView["slots"][n
         <div className={`space-y-1 rounded-md px-2 py-1.5 text-xs ${failed ? "text-red-600" : pendingReview ? "text-amber-600" : "text-green-600"}`}>
             <div className="flex items-center gap-1.5">
                 {failed || pendingReview ? <AlertTriangle className="size-3.5 shrink-0" /> : <Check className="size-3.5 shrink-0" />}
-                <span>{label} · {qc.source === "system" ? "系统检查" : "人工检查"}</span>
+                <span>
+                    {label} · {qc.source === "system" ? "系统检查" : "人工检查"}
+                </span>
             </div>
             {qc.issueCodes.length ? <div className="pl-5 text-[11px] opacity-80">{qc.issueCodes.join(" · ")}</div> : null}
             {qc.note ? <div className="pl-5 text-[11px] opacity-80">{qc.note}</div> : null}
@@ -518,6 +747,18 @@ function normalizeShotDuration(durationMs?: number) {
     return Math.min(60_000, Math.max(1_000, Math.round(duration)));
 }
 
+function normalizeVideoSlotDuration(durationMs?: number, fallbackDurationMs?: number) {
+    return Math.min(30_000, Math.max(1_000, Math.round(Number.isFinite(durationMs) ? Number(durationMs) : normalizeShotDuration(fallbackDurationMs))));
+}
+
+function moveItem<T>(values: T[], from: number, to: number) {
+    if (from === to || from < 0 || to < 0 || from >= values.length || to >= values.length) return values;
+    const next = [...values];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    return next;
+}
+
 function resolveFilmVideoResolution(model?: PublicLogicalModel) {
     const values = (model?.capabilitySpec.options?.vquality?.values || model?.capabilitySpec.options?.resolution?.values || [])
         .filter((value): value is string => typeof value === "string")
@@ -543,10 +784,13 @@ function stableOperationKey(ref: { current: { signature: string; key: string } }
 }
 
 function hasActiveVideoSequence(sequences?: FilmVideoSequenceView[]) {
-    return Boolean(sequences?.some((sequence) =>
-        sequence.sequenceVisualQcAttempts?.some((attempt) => ["queued", "running", "uncertain"].includes(attempt.attempt.status))
-        || sequence.slots.some((slot) => slot.attempts.some((attempt) => ["queued", "running", "uncertain"].includes(attempt.attempt.status))),
-    ));
+    return Boolean(
+        sequences?.some(
+            (sequence) =>
+                sequence.sequenceVisualQcAttempts?.some((attempt) => ["queued", "running", "uncertain"].includes(attempt.attempt.status)) ||
+                sequence.slots.some((slot) => slot.attempts.some((attempt) => ["queued", "running", "uncertain"].includes(attempt.attempt.status))),
+        ),
+    );
 }
 
 function videoStatusTone(status: string) {
