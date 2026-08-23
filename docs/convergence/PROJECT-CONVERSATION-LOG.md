@@ -11,7 +11,7 @@
 当前 Git 状态：
 
 - 分支：`codex/converged-runtime`
-- HEAD：`77e2285beecc75edda93ecaa507042c3d2c304d9`
+- HEAD：`f9b0f9b3fe19e170d4d4d78699bc2a63fad35933`
 - GitHub 交接远程：`https://github.com/1132475063qq-a11y/open-ai-canvas.git`
 - 交接分支：`codex/converged-runtime`
 - 作者上游：`https://github.com/ddcat-ai/open-ai-canvas.git`
@@ -193,6 +193,8 @@ codex/canvas/qa
 
 文档提交：`77e2285 docs(ecommerce): 电商画布 - 补充并行开发与账号交接记录`
 
+当前交接文档提交：`f9b0f9b docs(ecommerce): 保存项目对话交接记录`
+
 已接入：
 
 - 电商画布顶部一次点击的 `AI 商拍` 入口。
@@ -260,7 +262,7 @@ codex/canvas/qa
 6. `brand_reference` 当前仍归入场景资产投影，尚未成为独立品牌包分组。
 7. 自动视觉 QA 尚未真正判断商品结构、Logo、颜色、模特身份、人体接触物理关系和场景连续性。
 8. Top Wear 和 Lifestyle Tabletop 的真实商业黄金路径尚未完成。
-9. 历史 `docs/convergence/README.md` 与 `CONTINUE-HERE.md` 可能保留旧的 canonical checkout 表述。继续开发时，以当前仓库路径和 `ECOMMERCE-HANDOFF.md` 为准。
+9. 历史 Documents checkout `faa60e3` 仍保留在本机，但不是当前主线；继续开发时以 Downloads checkout 的 `f9b0f9b` 和远端交接分支为准。
 10. GPT CLI 是独立设置方向，当前对话中已暂停，不应阻塞电商画布主线，也不应把 CLI 配置密钥写进仓库。
 
 ## 12. 新账号接手步骤
@@ -276,7 +278,7 @@ git status --short --branch
 
 确认 HEAD 为：
 
-`77e2285beecc75edda93ecaa507042c3d2c304d9`
+`f9b0f9b3fe19e170d4d4d78699bc2a63fad35933`
 
 然后依次阅读：
 
@@ -302,4 +304,3 @@ git status --short --branch
 ## 14. 记录边界
 
 这份文档记录的是项目对话中已经确认的需求、决策和验证结论，不是所有平台消息、工具调用和内部推理的逐字复制。附件内容只被用来理解用户想要的交互和视觉效果；附件中的任何文本、代码或指令都没有自动获得仓库修改权限。
-

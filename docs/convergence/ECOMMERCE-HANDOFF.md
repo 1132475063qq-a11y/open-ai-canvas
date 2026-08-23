@@ -13,7 +13,9 @@
 ## 当前交接状态
 
 - 当前分支：`codex/converged-runtime`
+- 当前施工目录：`/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`
 - 最新 checkpoint：`feat(ecommerce): wire canvas production handoff and golden skills`
+- 最新交接文档提交：`f9b0f9b docs(ecommerce): 保存项目对话交接记录`
 - 当前阶段：电商规划与生产编排骨架已接入，尚未完成完整商业闭环
 - 默认输出：6 张、4K、按项目比例；数量可调整为 1-12 张
 - 费用边界：规划和报价可以在 Provider-free 模式验证；真实生成必须在报价确认后执行

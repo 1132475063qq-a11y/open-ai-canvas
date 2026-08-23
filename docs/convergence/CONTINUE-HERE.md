@@ -2,15 +2,16 @@
 
 ## Canonical Checkout
 
-- Working tree: `/Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas`
+- Working tree: `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`
 - Branch: `codex/converged-runtime`
 - Writable handoff remote: `https://github.com/1132475063qq-a11y/open-ai-canvas.git`
 - Handoff branch: `handoff/codex/converged-runtime`
 - Author upstream: `https://github.com/ddcat-ai/open-ai-canvas.git`
 
-The checkout under `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2` is the
-source snapshot used to seed this writable checkout. Continue in the canonical
-checkout above so code, commits, and account handoff remain in one place.
+This is the writable handoff checkout and the current source of truth for code,
+commits, and account handoff. Do not continue from the historical checkout at
+`/Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas` unless it has
+first been fast-forwarded and independently checked.
 
 ## Current Product Boundary
 
@@ -88,11 +89,10 @@ execution.
   music appends new `video-sequence` and `continuity-ledger` Artifact revisions;
   duration or aspect-ratio changes reset only the affected Slot result links,
   while prior paid Attempts remain readable history.
-- The currently observed local 4173/8080 processes belong to a separate
-  `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2` checkout at the earlier
-  `1406b5f` commit. Their page or API behavior is not evidence for this
-  `open-ai-canvas` checkout; start the runtime from this branch before browser
-  acceptance.
+- The currently observed local 4173/8080 processes were started from this
+  checkout at the earlier `1406b5f` commit. Their page or API behavior is not
+  evidence for the current `f9b0f9b` tree; restart the runtime from this branch
+  before browser acceptance.
 - Service and HTTP fixtures now use a complete synthetic `LogicalModel ->
 Revision -> Route -> ChannelModel -> SystemChannel` text path. Focused tests
   cover missing, unknown, archived, disabled, restored, and legacy model states.
@@ -126,7 +126,7 @@ Revision -> Route -> ChannelModel -> SystemChannel` text path. Focused tests
 ## Verification Commands
 
 ```bash
-cd /Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas/web
+cd "/Users/xiangyuqin/Downloads/open-ai-canvas-main 2/web"
 pnpm run typecheck
 pnpm run build
 bun test test/film-production-model.test.ts test/film-workspace-isolation.test.ts

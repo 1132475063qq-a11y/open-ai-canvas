@@ -18,10 +18,10 @@ corresponding project workspace.
 
 | Role                    | Location                                                                 | Revision                                           | Policy                                                          |
 | ----------------------- | ------------------------------------------------------------------------ | -------------------------------------------------- | --------------------------------------------------------------- |
-| Product mainline        | `/Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas`       | author baseline `ce86bb7` plus convergence commits | Modify here                                                     |
+| Product mainline        | `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`                      | current handoff `f9b0f9b`                                      | Modify here                                                     |
 | Mainline branch         | same repository                                                          | `codex/converged-runtime`                          | All convergence work; push to `handoff/codex/converged-runtime` |
 | Baseline tag            | same repository                                                          | `baseline/upstream-1635927-20260821`               | Never move                                                      |
-| Seed checkout           | `/Users/xiangyuqin/Downloads/open-ai-canvas-main 2`                      | local source snapshot                              | Read only after the canonical checkout was created              |
+| Historical checkout     | `/Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas`       | `faa60e3` ancestor; stale checkout                 | Read only; do not use as the convergence mainline                |
 | Feature donor           | `/Users/xiangyuqin/Downloads/infinite-canvas-short-drama`                | `codex/phase4-film-nodes` plus its dirty worktree  | Read only; cherry-pick concepts and scoped modules              |
 | AgentTeam authority     | `/Users/xiangyuqin/Downloads/影视短剧AgentTeam_v1.3.1_Conflict_Hardened` | v1.3.1                                             | Read only; compile contracts into runtime data                  |
 | Downloaded ZIP checkout | `/Users/xiangyuqin/Downloads/open-ai-canvas-main`                        | v1.0.49                                            | Historical reference only                                       |
