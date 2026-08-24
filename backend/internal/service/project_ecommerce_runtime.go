@@ -414,6 +414,9 @@ func (s *Service) RefreshProjectEcommerceRunQuote(userID string, projectID strin
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateEcommerceRunEvidence(userID, projectID, *run, false); err != nil {
+		return nil, err
+	}
 	if run.SubmittedAt != nil {
 		return nil, Conflict("该系列已经提交，不能重新报价")
 	}
@@ -462,6 +465,9 @@ func (s *Service) SubmitProjectEcommerceRun(userID string, projectID string, run
 	}
 	run, err := s.repo.EcommerceProductionRunForUser(userID, projectID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateEcommerceRunEvidence(userID, projectID, *run, false); err != nil {
 		return nil, err
 	}
 	if run.Status == EcommerceRunStatusGenerating || run.Status == EcommerceRunStatusQA || run.Status == EcommerceRunStatusNeedsYou || run.Status == EcommerceRunStatusReady {
@@ -572,6 +578,9 @@ func (s *Service) RetryProjectEcommerceSlot(userID string, projectID string, run
 	}
 	run, err := s.repo.EcommerceProductionRunForUser(userID, projectID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateEcommerceRunEvidence(userID, projectID, *run, false); err != nil {
 		return nil, err
 	}
 	slot, err := s.repo.EcommerceProductionSlotForUser(userID, runID, slotID)
