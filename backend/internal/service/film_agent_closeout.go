@@ -214,6 +214,13 @@ func (s *Service) evaluateFilmAgentCloseout(snapshot repository.AgentRuntimeLine
 		}
 	}
 	for _, run := range snapshot.Runs {
+		if metadata, metadataErr := filmAgentRunMetadata(run); metadataErr == nil {
+			if metadata.Mode == "plan_only" || metadata.ProviderStatus == "NOT_AVAILABLE" {
+				preview.Blockers = append(preview.Blockers, FilmAgentCloseoutBlocker{
+					Code: "provider_not_available", Message: "存在仅计划/Provider NOT_AVAILABLE 的 Film Run，未发生真实执行", RunID: run.ID,
+				})
+			}
+		}
 		if run.Status != model.AgentRunStatusCompleted {
 			preview.Blockers = append(preview.Blockers, FilmAgentCloseoutBlocker{
 				Code: "lineage_run_incomplete", Message: "运行链路中仍有未完成的 Run", RunID: run.ID,

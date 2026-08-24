@@ -32,6 +32,40 @@ type CreateFilmAgentRunRequest struct {
 	Input                    map[string]any `json:"input"`
 	InputArtifactRevisionIDs []string       `json:"inputArtifactRevisionIds"`
 	ReviewBeforeExecution    bool           `json:"reviewBeforeExecution"`
+	// PlanOnly records a durable graph/Artifact plan without dispatching a
+	// provider task. It is intentionally explicit so a missing provider can
+	// never be mistaken for a successful Agent execution.
+	PlanOnly                 bool           `json:"planOnly"`
+}
+
+// filmAgentExecutionMetadata is persisted inside the immutable Run input
+// envelope. The runtime models Step/Attempt state in the existing durable
+// tables; this envelope carries the graph identity needed to restore a child
+// or a fanout branch after a restart without trusting client-only metadata.
+type filmAgentExecutionMetadata struct {
+	SchemaVersion       int                          `json:"schemaVersion"`
+	Mode                string                       `json:"mode"` // execute | plan_only
+	ProviderStatus      string                       `json:"providerStatus"`
+	RouteKind           string                       `json:"routeKind"`
+	RouteID             string                       `json:"routeId"`
+	RootRunID           string                       `json:"rootRunId"`
+	ParentRunID         string                       `json:"parentRunId,omitempty"`
+	TriggerID           string                       `json:"triggerId,omitempty"`
+	Fanout              string                       `json:"fanout,omitempty"`
+	JoinKey             string                       `json:"joinKey,omitempty"`
+	LogicalModelID      string                       `json:"logicalModelId,omitempty"`
+	RegistryID          string                       `json:"registryId"`
+	RegistryVersion     string                       `json:"registryVersion"`
+	RegistryDigest      string                       `json:"registryDigest"`
+	InputArtifactRefs   []FilmProductionArtifactRef  `json:"inputArtifactRefs"`
+	ExpectedOutputTypes []string                     `json:"expectedOutputArtifactTypes"`
+}
+
+func filmAgentMetadataMode(planOnly bool) (string, string) {
+	if planOnly {
+		return "plan_only", "NOT_AVAILABLE"
+	}
+	return "execute", "available"
 }
 
 type ResolveFilmAgentDecisionRequest struct {
@@ -102,17 +136,19 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 		return FilmAgentRunCreateResult{}, err
 	}
 	logicalModelID := strings.TrimSpace(request.LogicalModelID)
-	if logicalModelID == "" {
-		return FilmAgentRunCreateResult{}, BadAuthRequest("请选择可用的逻辑文本模型")
+	if logicalModelID == "" && !request.PlanOnly {
+		return FilmAgentRunCreateResult{}, BadAuthRequest("请选择可用的逻辑文本模型，或显式使用 planOnly 生成计划")
 	}
-	if _, err := s.ResolveLogicalModel(logicalModelID, filmAgentTextModelIntent()); err != nil {
-		return FilmAgentRunCreateResult{}, err
+	if logicalModelID != "" {
+		if _, err := s.ResolveLogicalModel(logicalModelID, filmAgentTextModelIntent()); err != nil {
+			return FilmAgentRunCreateResult{}, err
+		}
 	}
 	route, selectedAgentID, routeReason, routeConfidence, err := s.selectFilmIntentRoute(objective, request.IntentRouteID, request.AgentID)
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
-	requestDigest, err := digestFilmAgentRequest(project.ID, objective, route.ID, selectedAgentID, logicalModelID, normalizedInput, request.InputArtifactRevisionIDs, request.ReviewBeforeExecution)
+	requestDigest, err := digestFilmAgentRequest(project.ID, objective, route.ID, selectedAgentID, logicalModelID, normalizedInput, request.InputArtifactRevisionIDs, request.ReviewBeforeExecution, request.PlanOnly)
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
@@ -128,7 +164,7 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 
 	runID := newID()
 	createdAt := time.Now().UTC()
-	steps, err := s.compileFilmIntentSteps(runID, route, selectedAgentID, nil, request.ReviewBeforeExecution, createdAt)
+	steps, err := s.compileFilmIntentSteps(runID, route, selectedAgentID, nil, request.ReviewBeforeExecution || request.PlanOnly, createdAt)
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
 	}
@@ -147,7 +183,7 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 	}
 	startArtifacts, startRevisions, startRefs, err := s.buildFilmProjectStartArtifacts(
 		userID, *project, runID, steps[0].ID, objective, route, selectedAgentID,
-		routeReason, routeConfidence, authorityRefs, request.ReviewBeforeExecution, createdAt,
+		routeReason, routeConfidence, authorityRefs, request.ReviewBeforeExecution, request.PlanOnly, createdAt,
 	)
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
@@ -159,12 +195,20 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 		steps[index].InputArtifactRefsJSON = string(inputRefsJSON)
 	}
 	runStatus := model.AgentRunStatusReady
-	if request.ReviewBeforeExecution {
+	if request.ReviewBeforeExecution || request.PlanOnly {
 		runStatus = model.AgentRunStatusAwaitingHuman
+	}
+	metadataMode, providerStatus := filmAgentMetadataMode(request.PlanOnly)
+	metadata := filmAgentExecutionMetadata{
+		SchemaVersion: 1, Mode: metadataMode, ProviderStatus: providerStatus, RouteKind: "intent", RouteID: route.ID,
+		RootRunID: runID, LogicalModelID: logicalModelID, RegistryID: s.filmAgentRegistry.ID,
+		RegistryVersion: s.filmAgentRegistry.Version, RegistryDigest: s.filmAgentRegistry.SourceDigest,
+		InputArtifactRefs: append([]FilmProductionArtifactRef(nil), inputRefs...), ExpectedOutputTypes: append([]string(nil), route.OutputArtifactTypes...),
 	}
 	runInputJSON, err := json.Marshal(map[string]any{
 		"schemaVersion": 1, "requestDigest": requestDigest, "input": normalizedInput,
 		"inputArtifactRefs": inputRefs, "reviewBeforeExecution": request.ReviewBeforeExecution, "logicalModelId": logicalModelID,
+		"planOnly": request.PlanOnly, "execution": metadata,
 	})
 	if err != nil {
 		return FilmAgentRunCreateResult{}, err
@@ -188,10 +232,15 @@ func (s *Service) CreateFilmAgentRun(userID string, projectID string, idempotenc
 		{ID: newID(), UserID: userID, RunID: run.ID, Sequence: 3, StepID: steps[0].ID, EventType: "run.planned", ActorType: "runtime", ActorID: "film-router-v1", FromStatus: string(model.AgentRunStatusPlanning), ToStatus: string(runStatus), PayloadJSON: mustFilmJSON(map[string]any{"intentRouteId": route.ID, "agentId": selectedAgentID, "skillIds": route.SkillIDs}), CreatedAt: createdAt},
 	}
 	var decision *model.AgentHumanDecision
-	if request.ReviewBeforeExecution {
+	if request.ReviewBeforeExecution || request.PlanOnly {
 		decision = &model.AgentHumanDecision{
 			ID: newID(), RunID: run.ID, StepID: steps[0].ID, Status: model.AgentHumanDecisionStatusPending,
-			Question:       fmt.Sprintf("确认按 %s 路由执行本次任务？", route.Name),
+			Question:       func() string {
+				if request.PlanOnly {
+					return fmt.Sprintf("%s 仅完成了 Film 执行计划；配置 Provider 后再确认执行？", route.Name)
+				}
+				return fmt.Sprintf("确认按 %s 路由执行本次任务？", route.Name)
+			}(),
 			OptionsJSON:    mustFilmJSON([]map[string]string{{"id": "approve", "label": "确认执行"}, {"id": "cancel", "label": "取消任务"}}),
 			Recommendation: "approve", ResponseJSON: "", ImpactRefsJSON: string(inputRefsJSON), Revision: 1,
 			CreatedAt: createdAt, UpdatedAt: createdAt,
@@ -799,6 +848,7 @@ func (s *Service) buildFilmProjectStartArtifacts(
 	routeConfidence string,
 	authorityRefs []FilmProductionArtifactRef,
 	reviewBeforeExecution bool,
+	planOnly bool,
 	at time.Time,
 ) ([]model.ProductionArtifact, []model.ProductionArtifactRevision, []FilmProductionArtifactRef, error) {
 	handoff, ok := s.filmAgentRegistry.HandoffRoute("HR-10")
@@ -821,7 +871,7 @@ func (s *Service) buildFilmProjectStartArtifacts(
 				"rootRunId": runID, "objective": objective, "intentRouteId": intentRoute.ID,
 				"assignedAgentId": selectedAgentID, "skillIds": intentRoute.SkillIDs,
 				"inputArtifactRevisionIds": inputRevisionIDs, "expectedOutputArtifactTypes": intentRoute.OutputArtifactTypes,
-				"reviewBeforeExecution": reviewBeforeExecution,
+				"reviewBeforeExecution": reviewBeforeExecution, "planOnly": planOnly,
 			},
 		},
 		{
@@ -867,10 +917,11 @@ func (s *Service) buildFilmProjectStartArtifacts(
 	return artifacts, revisions, refs, nil
 }
 
-func digestFilmAgentRequest(projectID string, objective string, routeID string, agentID string, logicalModelID string, input map[string]any, revisionIDs []string, review bool) (string, error) {
+func digestFilmAgentRequest(projectID string, objective string, routeID string, agentID string, logicalModelID string, input map[string]any, revisionIDs []string, review bool, planOnly bool) (string, error) {
 	encoded, err := json.Marshal(map[string]any{
 		"projectId": projectID, "objective": objective, "intentRouteId": routeID, "agentId": agentID,
-		"logicalModelId": logicalModelID, "input": input, "inputArtifactRevisionIds": revisionIDs, "reviewBeforeExecution": review,
+		"logicalModelId": logicalModelID, "input": input, "inputArtifactRevisionIds": revisionIDs,
+		"reviewBeforeExecution": review, "planOnly": planOnly,
 	})
 	if err != nil {
 		return "", err

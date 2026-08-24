@@ -92,6 +92,40 @@ func TestFilmAgentRegistryCompilesAllIntentRoutesIntoExecutableSteps(t *testing.
 	}
 }
 
+func TestFilmAgentPlanOnlyPersistsGraphMetadataAndNeverDispatches(t *testing.T) {
+	svc, repo, _, project := newFilmAgentRuntimeTestService(t)
+	created, err := svc.CreateFilmAgentRun(project.UserID, project.ID, "film-plan-only-0001", CreateFilmAgentRunRequest{
+		Objective: "写一个原创短片故事", IntentRouteID: "IR-01", PlanOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateFilmAgentRun(planOnly): %v", err)
+	}
+	var envelope struct {
+		Execution filmAgentExecutionMetadata `json:"execution"`
+	}
+	if err := json.Unmarshal([]byte(created.Detail.Run.InputJSON), &envelope); err != nil {
+		t.Fatalf("decode plan-only metadata: %v", err)
+	}
+	if envelope.Execution.Mode != "plan_only" || envelope.Execution.ProviderStatus != "NOT_AVAILABLE" ||
+		envelope.Execution.RouteKind != "intent" || envelope.Execution.RouteID != "IR-01" ||
+		envelope.Execution.RootRunID != created.Detail.Run.ID || len(envelope.Execution.ExpectedOutputTypes) != 1 {
+		t.Fatalf("plan-only execution metadata = %#v", envelope.Execution)
+	}
+	if created.Detail.Run.Status != model.AgentRunStatusAwaitingHuman || created.Detail.Steps[0].Status != model.AgentStepStatusAwaitingHuman {
+		t.Fatalf("plan-only run bypassed human gate: run=%s step=%s", created.Detail.Run.Status, created.Detail.Steps[0].Status)
+	}
+	if processed, err := svc.ProcessNextFilmAgentStep(); processed || err != nil {
+		t.Fatalf("plan-only run dispatched unexpectedly: processed=%v err=%v", processed, err)
+	}
+	detail, err := repo.AgentRuntimeDetailForUser(project.UserID, created.Detail.Run.ID)
+	if err != nil {
+		t.Fatalf("reload plan-only run: %v", err)
+	}
+	if len(detail.Attempts) != 0 || len(detail.Artifacts) != 3 {
+		t.Fatalf("plan-only run fabricated execution evidence: attempts=%d artifacts=%d", len(detail.Attempts), len(detail.Artifacts))
+	}
+}
+
 func TestFilmIntentRouterHandlesNaturalLanguageFillersWithoutHidingAmbiguity(t *testing.T) {
 	svc, _, _, _ := newFilmAgentRuntimeTestService(t)
 	route, agentID, _, confidence, err := svc.selectFilmIntentRoute("请帮我审查一下这个剧本，重点看人物动机", "", "")

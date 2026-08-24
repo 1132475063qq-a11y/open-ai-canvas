@@ -34,6 +34,35 @@ type filmHandoffSelection struct {
 	ParentRunID string
 }
 
+type filmAgentRunEnvelope struct {
+	LogicalModelID string                       `json:"logicalModelId"`
+	Execution      filmAgentExecutionMetadata   `json:"execution"`
+}
+
+func filmAgentRunMetadata(run model.AgentRuntimeRun) (filmAgentExecutionMetadata, error) {
+	var envelope filmAgentRunEnvelope
+	if err := json.Unmarshal([]byte(run.InputJSON), &envelope); err != nil {
+		return filmAgentExecutionMetadata{}, fmt.Errorf("decode Film Agent Run metadata: %w", err)
+	}
+	metadata := envelope.Execution
+	if metadata.SchemaVersion == 0 {
+		metadata.SchemaVersion = 1
+	}
+	if metadata.RootRunID == "" {
+		metadata.RootRunID = run.RootRunID
+	}
+	if metadata.RouteID == "" {
+		metadata.RouteID = run.IntentRouteID
+		if metadata.RouteID == "" {
+			metadata.RouteID = run.HandoffRouteID
+		}
+	}
+	if metadata.RouteKind == "" {
+		metadata.RouteKind = run.RouteKind
+	}
+	return metadata, nil
+}
+
 func (s *Service) startFilmAgentHandoffWorker() {
 	if s.filmAgentRegistry == nil {
 		return
@@ -134,6 +163,13 @@ func (s *Service) processClaimedFilmAgentHandoffTrigger(claim *repository.AgentH
 	if root.RegistryID != s.filmAgentRegistry.ID || root.RegistryVersion != s.filmAgentRegistry.Version || root.RegistryDigest != s.filmAgentRegistry.SourceDigest {
 		return errors.New("Film Handoff root Run is pinned to a different AgentTeam registry version")
 	}
+	rootMetadata, err := filmAgentRunMetadata(*root)
+	if err != nil {
+		return err
+	}
+	if rootMetadata.RootRunID != root.ID || rootMetadata.RegistryDigest != "" && rootMetadata.RegistryDigest != root.RegistryDigest {
+		return errors.New("Film Handoff root Run execution metadata is inconsistent")
+	}
 	artifact, lockedRevision, err := s.repo.ProductionArtifactRevisionForUser(trigger.UserID, trigger.RevisionID)
 	if err != nil {
 		return err
@@ -156,6 +192,9 @@ func (s *Service) processClaimedFilmAgentHandoffTrigger(claim *repository.AgentH
 		if !ready {
 			continue
 		}
+		if !s.filmHandoffJoinReady(trigger.UserID, trigger.ProjectID, trigger.RootRunID, route, facts) {
+			continue
+		}
 		runID, err := s.ensureFilmHandoffRun(trigger, *root, route, selection)
 		if err != nil {
 			return err
@@ -172,6 +211,46 @@ func (s *Service) processClaimedFilmAgentHandoffTrigger(claim *repository.AgentH
 func isAutomaticFilmHandoffRoute(route agentruntime.HandoffRouteDefinition) bool {
 	_, allowed := automaticFilmHandoffRouteIDs[route.ID]
 	return allowed && route.ExecutionMode == "agent" && route.InputResolutionMode == "static" && route.RequiresLockedInput
+}
+
+// HR-06 and HR-07 are independent supervision branches. HR-08 must not be
+// scheduled from whichever branch happens to lock first: it is a join over
+// both completed branches. The selected Artifact remains the newest locked
+// revision, while the branch checks make the join recoverable after a worker
+// restart and prevent a partial fanout from looking complete.
+func (s *Service) filmHandoffJoinReady(userID string, projectID string, rootRunID string, route agentruntime.HandoffRouteDefinition, facts []repository.ProductionArtifactRevisionFact) bool {
+	if route.ID != "HR-08" {
+		return true
+	}
+	runs, err := s.repo.ProjectAgentRuntimeRunsForDomain(userID, projectID, "film", 100)
+	if err != nil {
+		return false
+	}
+	routeByRun := make(map[string]string, len(runs))
+	for _, run := range runs {
+		if run.RootRunID == rootRunID || run.ID == rootRunID {
+			routeByRun[run.ID] = run.HandoffRouteID
+		}
+	}
+	completedBranches := map[string]bool{"HR-06": false, "HR-07": false}
+	for _, fact := range facts {
+		if fact.Artifact.ArtifactType != "production-feasibility-report" || fact.Revision.Status != model.ProductionArtifactStatusLocked {
+			continue
+		}
+		if completedBranches[routeByRun[fact.Revision.SourceRunID]] {
+			continue
+		}
+		branch := routeByRun[fact.Revision.SourceRunID]
+		if branch != "HR-06" && branch != "HR-07" {
+			continue
+		}
+		for _, run := range runs {
+			if run.ID == fact.Revision.SourceRunID && run.Status == model.AgentRunStatusCompleted {
+				completedBranches[branch] = true
+			}
+		}
+	}
+	return completedBranches["HR-06"] && completedBranches["HR-07"]
 }
 
 func resolveFilmHandoffSelection(route agentruntime.HandoffRouteDefinition, facts []repository.ProductionArtifactRevisionFact) (filmHandoffSelection, bool) {
@@ -261,17 +340,44 @@ func (s *Service) ensureFilmHandoffRun(trigger model.AgentHandoffTrigger, root m
 		}
 	}
 	if logicalModelID == "" {
-		return "", errors.New("Film Handoff 来源 Run 未绑定逻辑文本模型")
+		parentMetadata, metadataErr := filmAgentRunMetadata(*parent)
+		if metadataErr != nil {
+			return "", metadataErr
+		}
+		rootMetadata, metadataErr := filmAgentRunMetadata(root)
+		if metadataErr != nil {
+			return "", metadataErr
+		}
+		if parentMetadata.Mode != "plan_only" && rootMetadata.Mode != "plan_only" {
+			return "", &filmProviderUnavailableError{Message: "NOT_AVAILABLE: Film Handoff 来源 Run 未绑定可用逻辑文本模型"}
+		}
 	}
-	if _, err := s.ResolveLogicalModel(logicalModelID, filmAgentTextModelIntent()); err != nil {
-		return "", fmt.Errorf("Film Handoff 绑定的逻辑文本模型已不可用: %w", err)
+	parentMetadata, metadataErr := filmAgentRunMetadata(*parent)
+	if metadataErr != nil {
+		return "", metadataErr
+	}
+	rootMetadata, metadataErr := filmAgentRunMetadata(root)
+	if metadataErr != nil {
+		return "", metadataErr
+	}
+	planOnly := parentMetadata.Mode == "plan_only" || rootMetadata.Mode == "plan_only"
+	if logicalModelID != "" && !planOnly {
+		if _, err := s.ResolveLogicalModel(logicalModelID, filmAgentTextModelIntent()); err != nil {
+			return "", &filmProviderUnavailableError{Message: "NOT_AVAILABLE: Film Handoff 绑定的逻辑文本模型已不可用", Err: err}
+		}
 	}
 	runID := newID()
 	createdAt := time.Now().UTC()
+	stepStatus := model.AgentStepStatusReady
+	runStatus := model.AgentRunStatusReady
+	if planOnly {
+		stepStatus = model.AgentStepStatusAwaitingHuman
+		runStatus = model.AgentRunStatusAwaitingHuman
+	}
 	step := model.AgentRuntimeStep{
 		ID: newID(), RunID: runID, StepKey: "handoff:" + route.ID, Position: 0,
 		RouteKind: "handoff", RouteID: route.ID, AgentID: agentID, SkillIDsJSON: mustFilmJSON(route.SkillIDs),
-		Status: model.AgentStepStatusReady, DependsOnStepIDsJSON: "[]", InputArtifactRefsJSON: mustFilmJSON(selection.Refs),
+		Status: stepStatus, DependsOnStepIDsJSON: "[]", InputArtifactRefsJSON: mustFilmJSON(selection.Refs),
 		ExpectedOutputArtifactTypesJSON: mustFilmJSON(route.OutputArtifactTypes), OutputArtifactRefsJSON: "[]",
 		Revision: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
 	}
@@ -279,12 +385,20 @@ func (s *Service) ensureFilmHandoffRun(trigger model.AgentHandoffTrigger, root m
 	if canvasID == "" {
 		canvasID = strings.TrimSpace(root.CanvasID)
 	}
+	metadataMode, providerStatus := filmAgentMetadataMode(planOnly)
+	joinKey := digestBytesHex([]byte(root.ID + "\x00" + route.ID + "\x00" + requestDigest))
+	metadata := filmAgentExecutionMetadata{
+		SchemaVersion: 1, Mode: metadataMode, ProviderStatus: providerStatus, RouteKind: "handoff", RouteID: route.ID,
+		RootRunID: root.ID, ParentRunID: parent.ID, TriggerID: trigger.ID, Fanout: route.Fanout, JoinKey: joinKey,
+		LogicalModelID: logicalModelID, RegistryID: root.RegistryID, RegistryVersion: root.RegistryVersion, RegistryDigest: root.RegistryDigest,
+		InputArtifactRefs: append([]FilmProductionArtifactRef(nil), selection.Refs...), ExpectedOutputTypes: append([]string(nil), route.OutputArtifactTypes...),
+	}
 	runInputJSON, err := json.Marshal(map[string]any{
 		"schemaVersion": 1, "requestDigest": requestDigest, "logicalModelId": logicalModelID,
 		"input": map[string]any{
 			"handoffRouteId": route.ID, "handoffName": route.Name, "rootRunId": root.ID, "parentRunId": parent.ID,
 		},
-		"inputArtifactRefs": selection.Refs,
+		"inputArtifactRefs": selection.Refs, "execution": metadata,
 	})
 	if err != nil {
 		return "", err
@@ -293,7 +407,7 @@ func (s *Service) ensureFilmHandoffRun(trigger model.AgentHandoffTrigger, root m
 		ID: runID, UserID: trigger.UserID, ProjectID: root.ProjectID, CanvasID: canvasID, Domain: "film",
 		RegistryID: root.RegistryID, RegistryVersion: root.RegistryVersion, RegistryDigest: root.RegistryDigest,
 		RouteKind: "handoff", HandoffRouteID: route.ID, RootRunID: root.ID, ParentRunID: parent.ID,
-		Status: model.AgentRunStatusReady, Objective: truncateRunes(route.Name+"："+root.Objective, 4000), InputJSON: string(runInputJSON),
+		Status: runStatus, Objective: truncateRunes(route.Name+"："+root.Objective, 4000), InputJSON: string(runInputJSON),
 		CurrentStepID: step.ID, IdempotencyKey: idempotencyKey, Revision: 1, EventSequence: 2,
 		CreatedAt: createdAt, UpdatedAt: createdAt,
 	}
@@ -305,9 +419,15 @@ func (s *Service) ensureFilmHandoffRun(trigger model.AgentHandoffTrigger, root m
 	}
 	events := []model.AgentRuntimeEvent{
 		{ID: newID(), UserID: run.UserID, RunID: run.ID, Sequence: 1, EventType: "run.created", ActorType: "runtime", ActorID: "film-handoff-orchestrator-v1", ToStatus: string(model.AgentRunStatusPlanning), PayloadJSON: mustFilmJSON(map[string]any{"rootRunId": root.ID, "parentRunId": parent.ID, "triggerId": trigger.ID}), CreatedAt: createdAt},
-		{ID: newID(), UserID: run.UserID, RunID: run.ID, Sequence: 2, StepID: step.ID, EventType: "handoff.planned", ActorType: "runtime", ActorID: "film-handoff-orchestrator-v1", FromStatus: string(model.AgentRunStatusPlanning), ToStatus: string(model.AgentRunStatusReady), PayloadJSON: mustFilmJSON(map[string]any{"handoffRouteId": route.ID, "agentId": agentID, "skillIds": route.SkillIDs, "inputArtifactRefs": selection.Refs}), CreatedAt: createdAt},
+		{ID: newID(), UserID: run.UserID, RunID: run.ID, Sequence: 2, StepID: step.ID, EventType: "handoff.planned", ActorType: "runtime", ActorID: "film-handoff-orchestrator-v1", FromStatus: string(model.AgentRunStatusPlanning), ToStatus: string(runStatus), PayloadJSON: mustFilmJSON(map[string]any{"handoffRouteId": route.ID, "agentId": agentID, "skillIds": route.SkillIDs, "inputArtifactRefs": selection.Refs, "fanout": route.Fanout, "joinKey": joinKey, "providerStatus": providerStatus}), CreatedAt: createdAt},
 	}
-	bundle := repository.AgentRuntimeCreateBundle{Run: run, RoutingDecision: routing, Steps: []model.AgentRuntimeStep{step}, Events: events}
+	var decision *model.AgentHumanDecision
+	if planOnly {
+		decision = &model.AgentHumanDecision{ID: newID(), RunID: runID, StepID: step.ID, Status: model.AgentHumanDecisionStatusPending,
+			Question: "Provider 未配置；确认前仅保留 Film Handoff 计划，不会生成媒体或伪造 Artifact？", OptionsJSON: mustFilmJSON([]map[string]string{{"id": "approve", "label": "确认计划"}, {"id": "cancel", "label": "取消任务"}}),
+			Recommendation: "cancel", ImpactRefsJSON: mustFilmJSON(selection.Refs), Revision: 1, CreatedAt: createdAt, UpdatedAt: createdAt}
+	}
+	bundle := repository.AgentRuntimeCreateBundle{Run: run, RoutingDecision: routing, Steps: []model.AgentRuntimeStep{step}, HumanDecision: decision, Events: events}
 	if err := s.repo.CreateAgentRuntimeBundle(bundle); err != nil {
 		existing, lookupErr := s.repo.AgentRuntimeRunByIdempotency(trigger.UserID, idempotencyKey)
 		if lookupErr == nil && existing.ProjectID == root.ProjectID && existing.Domain == "film" && existing.HandoffRouteID == route.ID &&

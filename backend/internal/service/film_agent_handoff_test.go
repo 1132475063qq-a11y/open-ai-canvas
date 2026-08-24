@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestFilmHandoffDoesNotCreateAChildRunWhenTheTextModelBecomesUnavailable(t *
 	if err != nil {
 		t.Fatalf("load rejected Film Handoff Trigger: %v", err)
 	}
-	if trigger.Status != model.AgentHandoffTriggerStatusPending || trigger.FailureCode != "film_handoff_processing_failed" || trigger.NextAttemptAt == nil {
+	if trigger.Status != model.AgentHandoffTriggerStatusPending || trigger.FailureCode != "film_handoff_processing_failed" || trigger.NextAttemptAt == nil || !strings.Contains(trigger.Failure, "NOT_AVAILABLE") {
 		t.Fatalf("rejected Film Handoff did not preserve retry evidence: %#v", trigger)
 	}
 }
@@ -147,6 +148,18 @@ func TestLockedFilmArtifactsDriveDurableHandoffRunsWithoutDuplicateRoutes(t *tes
 	}
 	if visualRun.ParentRunID != directorRun.ID || soundRun.ParentRunID != directorRun.ID || visualRun.RootRunID != rootDetail.Run.ID || soundRun.RootRunID != rootDetail.Run.ID {
 		t.Fatalf("fanout Handoff Runs lost lineage: visual=%#v sound=%#v", visualRun, soundRun)
+	}
+	visualMetadata, err := filmAgentRunMetadata(visualRun)
+	if err != nil {
+		t.Fatalf("decode HR-04 execution metadata: %v", err)
+	}
+	soundMetadata, err := filmAgentRunMetadata(soundRun)
+	if err != nil {
+		t.Fatalf("decode HR-05 execution metadata: %v", err)
+	}
+	if visualMetadata.TriggerID == "" || soundMetadata.TriggerID == "" || visualMetadata.JoinKey == "" || soundMetadata.JoinKey == "" ||
+		visualMetadata.Fanout != "parallel" || soundMetadata.Fanout != "parallel" || visualMetadata.RootRunID != rootDetail.Run.ID || soundMetadata.ParentRunID != directorRun.ID {
+		t.Fatalf("fanout execution metadata is incomplete: visual=%#v sound=%#v", visualMetadata, soundMetadata)
 	}
 	if len(visualDetail.Steps) != 1 || visualDetail.Steps[0].SkillIDsJSON != `["character-visual-design","scene-asset-design"]` ||
 		visualDetail.Steps[0].AgentID != "visual_development_designer" {

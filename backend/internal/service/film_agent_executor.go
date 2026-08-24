@@ -57,6 +57,26 @@ type filmAgentExecutionError struct {
 	Err     error
 }
 
+// filmProviderUnavailableError is a stable, non-success outcome. It is used
+// for missing/disabled logical routes so API/runtime evidence can say
+// NOT_AVAILABLE without manufacturing text or media artifacts.
+type filmProviderUnavailableError struct {
+	Message string
+	Err     error
+}
+
+func (e *filmProviderUnavailableError) Error() string {
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return "NOT_AVAILABLE: Film Provider is not configured"
+}
+
+func (e *filmProviderUnavailableError) Unwrap() error { return e.Err }
+
 func (e *filmAgentExecutionError) Error() string {
 	if strings.TrimSpace(e.Message) != "" {
 		return e.Message
@@ -82,6 +102,9 @@ func (e *queuedFilmAgentExecutor) Execute(ctx context.Context, request filmAgent
 	}
 	task, err := e.ensureTask(request)
 	if err != nil {
+		if filmAgentProviderUnavailable(err) {
+			return filmAgentExecutionResponse{}, &filmProviderUnavailableError{Message: "NOT_AVAILABLE: Film Provider 未配置或不可用", Err: err}
+		}
 		return filmAgentExecutionResponse{}, &filmAgentExecutionError{Code: "film_task_dispatch_failed", Message: e.service.UserFacingErrorMessage(err), Err: err}
 	}
 	pollInterval := e.pollInterval
@@ -118,6 +141,19 @@ func (e *queuedFilmAgentExecutor) Execute(ctx context.Context, request filmAgent
 			task = latest
 		}
 	}
+}
+
+func filmAgentProviderUnavailable(err error) bool {
+	if errors.Is(err, repository.ErrLogicalModelUnavailable) {
+		return true
+	}
+	var authErr *AuthError
+	if errors.As(err, &authErr) {
+		message := strings.ToLower(strings.TrimSpace(authErr.Message))
+		return strings.Contains(message, "模型不可用") || strings.Contains(message, "model") && strings.Contains(message, "不可用")
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "logical model is unavailable") || strings.Contains(message, "provider is not configured")
 }
 
 func (e *queuedFilmAgentExecutor) ensureTask(request filmAgentExecutionRequest) (*model.Task, error) {
@@ -260,6 +296,7 @@ func (s *Service) processClaimedFilmAgentExecution(claim *repository.AgentRuntim
 			"schemaVersion": 1, "logicalModelId": request.LogicalModelID, "agentId": request.AgentID,
 			"skillIds": request.SkillIDs, "expectedOutputArtifactTypes": request.ExpectedOutputArtifactTypes,
 			"inputDigest": request.InputDigest, "promptDigest": request.PromptDigest,
+			"routeKind": claim.Step.RouteKind, "routeId": claim.Step.RouteID, "rootRunId": claim.Run.RootRunID,
 		})
 		prepared, prepareErr := s.repo.PrepareClaimedAgentRuntimeAttempt(repository.AgentRuntimeAttemptMetadata{
 			Owner: s.workerID + ":film", RunID: claim.Run.ID, StepID: claim.Step.ID, AttemptID: claim.Attempt.ID,
@@ -334,6 +371,10 @@ func (s *Service) failClaimedFilmAgentExecution(claim repository.AgentRuntimeExe
 }
 
 func filmAgentFailureDetails(err error) (string, string) {
+	var unavailable *filmProviderUnavailableError
+	if errors.As(err, &unavailable) {
+		return "film_provider_not_available", truncateRunes(unavailable.Error(), 2000)
+	}
 	var executionErr *filmAgentExecutionError
 	if errors.As(err, &executionErr) {
 		return defaultString(strings.TrimSpace(executionErr.Code), "film_executor_failed"), truncateRunes(executionErr.Error(), 2000)
@@ -352,9 +393,16 @@ func (s *Service) buildFilmAgentExecutionRequest(claim repository.AgentRuntimeEx
 	var runEnvelope struct {
 		LogicalModelID string         `json:"logicalModelId"`
 		Input          map[string]any `json:"input"`
+		Execution      filmAgentExecutionMetadata `json:"execution"`
 	}
 	if err := json.Unmarshal([]byte(claim.Run.InputJSON), &runEnvelope); err != nil {
 		return filmAgentExecutionRequest{}, fmt.Errorf("decode Film Agent Run input: %w", err)
+	}
+	if runEnvelope.Execution.Mode == "plan_only" {
+		return filmAgentExecutionRequest{}, &filmProviderUnavailableError{Message: "NOT_AVAILABLE: Film Agent Run is plan-only; Provider execution is gated"}
+	}
+	if runEnvelope.Execution.RegistryDigest != "" && runEnvelope.Execution.RegistryDigest != claim.Run.RegistryDigest {
+		return filmAgentExecutionRequest{}, errors.New("Film Agent execution metadata registry digest does not match Run")
 	}
 	var skillIDs []string
 	if err := json.Unmarshal([]byte(claim.Step.SkillIDsJSON), &skillIDs); err != nil || len(skillIDs) == 0 {
