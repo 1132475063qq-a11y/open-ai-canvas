@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 test("Dreamina B completion crosses A Runtime, HTTP wait, and the Web parser without querying from A", async () => {
+    const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     const child = spawn(process.execPath, [
-        path.resolve("node_modules/tsx/dist/cli.mjs"),
+        path.resolve(packageRoot, "node_modules/tsx/dist/cli.mjs"),
         "--tsconfig",
-        path.resolve("../web/tsconfig.json"),
-        path.resolve("test/fixtures/dreamina-cross-runtime-web-fixture.ts"),
+        path.resolve(packageRoot, "../web/tsconfig.json"),
+        path.resolve(packageRoot, "test/fixtures/dreamina-cross-runtime-web-fixture.ts"),
     ], {
-        cwd: process.cwd(),
+        cwd: packageRoot,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
     });

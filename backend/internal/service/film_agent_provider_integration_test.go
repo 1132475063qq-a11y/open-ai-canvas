@@ -215,7 +215,7 @@ func newFilmAgentProviderIntegrationService(t *testing.T, providerBaseURL string
 	}
 	featureSetting := model.SystemSetting{
 		Key:       featureAvailabilitySettingKey,
-		ValueJSON: `{"shortDramaEnabled":true,"taskCenterEnabled":true,"creditsEnabled":false,"customChannelsEnabled":true}`,
+		ValueJSON: `{"shortDramaEnabled":true,"taskCenterEnabled":true,"creditsEnabled":false,"customChannelsEnabled":true,"frontendModelsEnabled":true}`,
 		UpdatedBy: "test", CreatedAt: now, UpdatedAt: now,
 	}
 	for _, item := range []any{&user, &project, &channel, &channelModel, &logicalModel, &revision, &logicalRoute, &featureSetting} {

@@ -46,7 +46,7 @@ export function createCanvasNode(type: CanvasNodeType, position: Position, metad
         width: spec.width,
         height: spec.height,
         metadata: type === CanvasNodeType.Script
-            ? { ...spec.metadata, ...metadata, storyboard: metadata?.storyboard || { rows: [1, 2, 3].map((shotNumber) => createStoryboardRow(shotNumber)), visibleColumns: ["shotNumber", "durationSeconds", "plotDescription", "dialogue"], referenceNodeIds: [] } }
+            ? { ...spec.metadata, ...metadata, storyboard: metadata?.storyboard || { rows: [1, 2, 3].map((shotNumber) => createStoryboardRow(shotNumber)), visibleColumns: ["shotNumber", "plotDescription", "videoMotionPrompt", "dialogue"], referenceNodeIds: [] } }
             : { ...spec.metadata, ...metadata, ...(type === CanvasNodeType.Drawing ? { drawingId: metadata?.drawingId || `${id}-document` } : {}) },
     };
 }
@@ -108,7 +108,7 @@ export function storyboardPromptTemplateMetadata(row: StoryboardRow, kind: "imag
 
 export function cinematicStoryboardColumns(columns?: StoryboardColumn[]): StoryboardColumn[] {
     return Array.from(new Set([
-        ...(columns || ["shotNumber", "durationSeconds", "plotDescription", "dialogue"]),
+        ...(columns || ["shotNumber", "plotDescription", "videoMotionPrompt", "dialogue"]),
         "shotSize",
         "narrativeIntent",
         "viewerPOV",
@@ -183,15 +183,15 @@ function resetGenerationParamsOnModelSwitch(node: CanvasNodeData, patch: Partial
     return { ...reset, ...patch };
 }
 
-export function getConnectionTargetAnchor(node: CanvasNodeData, current: ConnectionHandle, handleId?: string, scrollTop = 0, anchorRatio?: number) {
+/**
+ * 连线落到目标节点上的吸附点。单端口一侧取边的正中——与 connectionHandleY 保持同一个
+ * 口径，否则吸附点和实际画出来的线会对不上（这两处是同一规则的两份实现，改一处必错）。
+ */
+export function getConnectionTargetAnchor(node: CanvasNodeData, current: ConnectionHandle, handleId?: string, scrollTop = 0) {
     return {
         x: current.handleType === "source" ? node.position.x : node.position.x + node.width,
-        y: storyboardHandleY(node, handleId, scrollTop) ?? node.position.y + node.height * normalizeAnchorRatio(anchorRatio),
+        y: storyboardHandleY(node, handleId, scrollTop) ?? node.position.y + node.height / 2,
     };
-}
-
-function normalizeAnchorRatio(value?: number) {
-    return typeof value === "number" && Number.isFinite(value) ? clamp(value, 0.06, 0.94) : 0.5;
 }
 
 export function storyboardHandleAtY(node: CanvasNodeData, worldY: number, scrollTop = 0) {
@@ -258,7 +258,7 @@ export function attachNodeToStoryboardRow(nodes: CanvasNodeData[], connection: P
                     rows: (storyboard?.rows || []).map((item) => item.id !== rowId ? item : scriptNodeId === connection.fromNodeId
                         ? { ...item, imageNodeId: linkedNode.type === CanvasNodeType.Image ? linkedNode.id : item.imageNodeId, videoNodeId: linkedNode.type === CanvasNodeType.Video ? linkedNode.id : item.videoNodeId }
                         : { ...item, referenceNodeIds: Array.from(new Set([...(item.referenceNodeIds || []), linkedNode.id])) }),
-                    visibleColumns: storyboard?.visibleColumns || ["shotNumber", "durationSeconds", "plotDescription", "dialogue"],
+                    visibleColumns: storyboard?.visibleColumns || ["shotNumber", "plotDescription", "videoMotionPrompt", "dialogue"],
                     referenceNodeIds: handleId === "storyboard:context" ? Array.from(new Set([...(storyboard?.referenceNodeIds || []), linkedNode.id])) : storyboard?.referenceNodeIds || [],
                 },
             },

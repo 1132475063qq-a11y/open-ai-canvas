@@ -156,7 +156,7 @@ test("Dreamina submission uncertainty is not an accepted background task", () =>
     expect(localDreaminaCancellationCopy(uncertain)).toBeUndefined();
 });
 
-test("Canvas task surfaces route Dreamina uncertainty through shared display semantics", async () => {
+test("Canvas task surfaces route Dreamina uncertainty through shared display semantics without cancellation", async () => {
     const [nodeSource, detailSource, scriptSource, taskCenterSource, createSource] = await Promise.all([
         Bun.file(new URL("../src/components/canvas/canvas-node-content.tsx", import.meta.url)).text(),
         Bun.file(new URL("../src/pages/canvas/canvas-project-status-dialogs.tsx", import.meta.url)).text(),
@@ -166,30 +166,8 @@ test("Canvas task surfaces route Dreamina uncertainty through shared display sem
     ]);
     expect(nodeSource).toContain("generationTaskStageLabel(displayTask)");
     expect(nodeSource).toContain("generationTaskShowsProgress(displayTask)");
-    const loadingContentSource = sourceSection(nodeSource, "function LoadingContent(", "function useTaskElapsed(");
-    const cancelBranchStart = loadingContentSource.indexOf("{!submissionUncertain ? (");
-    const cancelBranchEndMarker = ") : null}";
-    const cancelBranchEnd = loadingContentSource.indexOf(cancelBranchEndMarker, cancelBranchStart);
-    expect(cancelBranchStart).toBeGreaterThanOrEqual(0);
-    expect(cancelBranchEnd).toBeGreaterThan(cancelBranchStart);
-
-    const cancelBranchSource = loadingContentSource.slice(cancelBranchStart, cancelBranchEnd + cancelBranchEndMarker.length);
-    const cancelButtonStart = cancelBranchSource.indexOf("<button");
-    const cancelButtonEndMarker = "</button>";
-    const cancelButtonEnd = cancelBranchSource.indexOf(cancelButtonEndMarker, cancelButtonStart);
-    expect(cancelButtonStart).toBeGreaterThan(0);
-    expect(cancelButtonEnd).toBeGreaterThan(cancelButtonStart);
-    expect(cancelBranchSource.slice(0, cancelButtonStart)).toBe("{!submissionUncertain ? ( ");
-
-    const cancelButtonSource = cancelBranchSource.slice(cancelButtonStart, cancelButtonEnd + cancelButtonEndMarker.length);
-    const onClickStart = cancelButtonSource.indexOf("onClick={(event) => {");
-    const onClickEnd = cancelButtonSource.indexOf("}}", onClickStart);
-    expect(cancelButtonSource).toContain("<button");
-    expect(onClickStart).toBeGreaterThanOrEqual(0);
-    expect(onClickEnd).toBeGreaterThan(onClickStart);
-    expect(cancelButtonSource.slice(onClickStart, onClickEnd)).toContain("onCancelTask?.(node);");
-    expect(cancelButtonSource).toContain("<Square");
-    expect(cancelButtonSource).toContain("取消");
+    expect(nodeSource).not.toContain("onCancelTask");
+    expect(nodeSource).not.toContain("取消生成");
     expect(nodeSource).not.toContain('node.metadata?.taskStage || (taskId ? "任务处理中" : "正在创建任务")');
     expect(detailSource).toContain("generationTaskStageLabel(task)");
     expect(detailSource).toContain("generationTaskShowsProgress(task) ? <TaskDetailItem");
@@ -198,9 +176,9 @@ test("Canvas task surfaces route Dreamina uncertainty through shared display sem
     expect(scriptSource).toContain("generationTaskShowsProgress(displayTask)");
     expect(scriptSource).not.toContain('node.metadata.taskStage || "正在创建任务"');
     expect(nodeSource).toContain("isGenerationTaskSubmissionUncertain(errorDisplayTask)");
-    expect(taskCenterSource).toContain('if (action === "retry" && currentTask && isGenerationTaskSubmissionUncertain(currentTask))');
+    expect(taskCenterSource).toContain("if (currentTask && isGenerationTaskSubmissionUncertain(currentTask))");
     expect(taskCenterSource).toContain("不能自动重试；请先核对官方状态，避免重复生成");
-    expect(taskCenterSource).toContain('onRetry={() => void runAction(task.id, "retry")}');
+    expect(taskCenterSource).toContain('onRetry={() => void runAction(task.id)}');
     expect(taskCenterSource).toContain("<TaskListRow");
     expect(taskCenterSource).toContain("<TaskGridCard");
     expect(createSource).not.toContain('item.generationStage === "submission_unknown"');
@@ -1341,6 +1319,15 @@ test("remote image video and audio references keep Backend parity without Dreami
             operation: "reference_to_video",
         },
         {
+            mode: "video" as const,
+            references: {
+                referenceImages: [{ id: "remote-image-audio-image-0001", name: "reference.png", type: "image/png", dataUrl: "", storageKey: "resource:remote-image-audio-image-0001" }],
+                referenceAudios: [{ id: "remote-image-audio-audio-0001", name: "reference.mp3", type: "audio/mpeg", url: "", storageKey: "resource:remote-image-audio-audio-0001" }],
+            },
+            result: { mode: "video", video: { dataUrl: "opaque://video", storageKey: "resource:remote-image-audio-output" } },
+            operation: "reference_to_video",
+        },
+        {
             mode: "audio" as const,
             references: { referenceAudios: [{ id: "remote-audio-0001", name: "audio.mp3", type: "audio/mpeg", url: "", storageKey: "resource:remote-audio-0001" }] },
             result: { mode: "audio", audio: { dataUrl: "opaque://audio", storageKey: "resource:remote-audio-output" } },
@@ -1699,7 +1686,7 @@ test("Create audio upload converts, previews, removes, and submits through the s
         operation?: string;
         input?: { referenceAudios?: Array<Record<string, unknown>> };
     };
-    expect(submitted.operation).toBe("reference_to_video");
+    expect(submitted.operation).toBe("audio_to_video");
     expect(submitted.input?.referenceAudios).toEqual([
         {
             id: attachment.id,

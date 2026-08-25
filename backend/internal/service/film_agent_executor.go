@@ -172,7 +172,7 @@ func (e *queuedFilmAgentExecutor) ensureTask(request filmAgentExecutionRequest) 
 		},
 	}
 	task, err := e.service.createTaskWithID(request.UserID, request.TaskID, CreateTaskRequest{
-		ProjectID: request.ProjectID, Type: "canvas_text_film_agent", Operation: "film_agent_skill",
+		ProjectID: request.ProjectID, Type: model.FilmAgentTaskType, Operation: "film_agent_skill",
 		Prompt: request.Prompt, Provider: "managed", LogicalModelID: request.LogicalModelID, Input: input,
 	})
 	if err == nil {
@@ -185,7 +185,7 @@ func (e *queuedFilmAgentExecutor) ensureTask(request filmAgentExecutionRequest) 
 }
 
 func (e *queuedFilmAgentExecutor) verifyTask(task *model.Task, request filmAgentExecutionRequest) (*model.Task, error) {
-	if task.UserID != request.UserID || task.ProjectID != request.ProjectID || task.Type != "canvas_text_film_agent" || task.Operation != "film_agent_skill" {
+	if task.UserID != request.UserID || task.ProjectID != request.ProjectID || task.Type != model.FilmAgentTaskType || task.Operation != "film_agent_skill" {
 		return nil, errors.New("Film Agent Attempt TaskID references a different task")
 	}
 	decrypted, err := e.service.decryptTaskInputJSON(task.InputJSON)
@@ -391,8 +391,8 @@ func filmAgentFailureDetails(err error) (string, string) {
 
 func (s *Service) buildFilmAgentExecutionRequest(claim repository.AgentRuntimeExecutionClaim) (filmAgentExecutionRequest, error) {
 	var runEnvelope struct {
-		LogicalModelID string         `json:"logicalModelId"`
-		Input          map[string]any `json:"input"`
+		LogicalModelID string                     `json:"logicalModelId"`
+		Input          map[string]any             `json:"input"`
 		Execution      filmAgentExecutionMetadata `json:"execution"`
 	}
 	if err := json.Unmarshal([]byte(claim.Run.InputJSON), &runEnvelope); err != nil {

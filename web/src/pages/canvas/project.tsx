@@ -7,7 +7,9 @@ import { uploadMediaFile } from "@/services/file-storage";
 import { readLocalRuntimeBootstrapState } from "@/services/local-runtime-bootstrap";
 import { createCanvasGenerationLiveProjectAdapter, registerCanvasGenerationLiveProject } from "@/services/canvas-generation-consumer";
 import { getActiveUserScope } from "@/lib/user-scope";
-import { resourceFileUrl, resourceIdFromStorageKey } from "@/services/api/resources";
+import { resourceFileUrl, resourceIdFromStorageKey, syncResourceToArkPrivateAsset } from "@/services/api/resources";
+import { uploadImage } from "@/services/image-storage";
+import { imageMetadata } from "@/lib/canvas/canvas-generation-task-sync";
 import copyToClipboard from "copy-to-clipboard";
 import { nanoid } from "nanoid";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -20,7 +22,7 @@ import { flushCanvasStorePersistence } from "@/stores/canvas/use-canvas-store";
 import { ensureCanvasNodeAsset } from "@/services/project-asset-sync";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
-import { App } from "antd";
+import { App, Modal } from "antd";
 import { getNodeSpec } from "@/constant/canvas";
 import { CanvasConfigComposer } from "@/components/canvas/canvas-config-composer";
 import { CanvasConfigNodePanel } from "@/components/canvas/canvas-config-node-panel";
@@ -69,7 +71,7 @@ import { CanvasVersionCompareModal } from "@/components/canvas/canvas-version-co
 import { CanvasLocalAgentPanel } from "@/components/canvas/canvas-local-agent-panel";
 import { useFocusMode } from "@/hooks/use-focus-mode";
 import { useCanvasAgentStore } from "@/stores/canvas/use-canvas-agent-store";
-import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { getContextResourceNodes, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasConnectionCreateMenu, CanvasNodePanelOverlay } from "@/components/canvas/canvas-workspace-overlays";
 import { CanvasLeaferGraphicsLayer } from "@/components/canvas/canvas-leafer-graphics-layer";
 import { CanvasEcommerceEmptyState, CanvasFreeformEmptyState, CanvasLinkedProjectEmptyState, CanvasShortDramaGuide, CanvasStoryInputNodeContent, CanvasStylePlaceholderNodeContent } from "@/components/canvas/canvas-short-drama-entry";
@@ -80,7 +82,7 @@ import { batchSourceRestriction } from "@/lib/canvas/canvas-batch-connection";
 import { deriveStoryboardPipelineProgress } from "@/lib/canvas/canvas-storyboard-progress";
 import { CanvasAgentChangeToast, CanvasMergeStatusToast, CanvasUploadStatusToast } from "./canvas-project-feedback";
 import { backendProviderConfig, getGenerationCount } from "@/lib/canvas/canvas-project-generation";
-import { CanvasTopBar } from "./canvas-project-top-bar";
+import { CanvasTopBar, CanvasWorkspaceModeSwitch } from "./canvas-project-top-bar";
 import { LibTVImportDialog } from "./components/libtv-import-dialog";
 import { TapNowImportDialog } from "./components/tapnow-import-dialog";
 import { CanvasFocusModeBar } from "@/components/canvas/canvas-focus-mode-bar";
@@ -90,6 +92,7 @@ import { CanvasProjectSelectionToolbar } from "./canvas-project-selection-toolba
 import { CanvasProjectStatusDialogs } from "./canvas-project-status-dialogs";
 import { CanvasProjectWorldLayers } from "./canvas-project-world-layers";
 import { CanvasNodeActionContext } from "@/components/canvas/canvas-node-action-context";
+import { CanvasNodeGraphContext, type CanvasNodeGraphContextValue } from "@/components/canvas/canvas-node-graph-context";
 import { CanvasRefreshShell } from "./canvas-refresh-shell";
 import type { CanvasImageEmotionPayload } from "@/components/canvas/canvas-node-emotion-panel";
 import { CanvasEmotionWorkspace } from "@/components/canvas/canvas-emotion-workspace";
@@ -197,7 +200,7 @@ function InfiniteCanvasPage() {
     const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
-    const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("dots");
+    const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [canvasTool, setCanvasTool] = useState<CanvasToolMode>("move");
     const [mediaPerformanceMode, setMediaPerformanceMode] = useState<CanvasMediaPerformanceMode>(readCanvasMediaPerformanceMode);
@@ -208,6 +211,7 @@ function InfiniteCanvasPage() {
     const [tapNowImportOpen, setTapNowImportOpen] = useState(false);
     const [nodeSearchOpen, setNodeSearchOpen] = useState(false);
     const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
+    const [arkPrivateAssetUploadNodeId, setArkPrivateAssetUploadNodeId] = useState<string | null>(null);
     const [nodeImageSettingsOpen, setNodeImageSettingsOpen] = useState(false);
     const [dialogNodeId, setDialogNodeId] = useState<string | null>(null);
     const [textEditorNodeId, setTextEditorNodeId] = useState<string | null>(null);
@@ -465,12 +469,14 @@ function InfiniteCanvasPage() {
         setConnections(reconciled.connections);
     }, [ecommerceWorkspaceQuery.dataUpdatedAt, isEcommerceProject, linkedProjectQuery.data, projectLoaded, setConnections, setNodes]);
     const canvasContext = useMemo(() => summarizeCanvasContext(nodes, selectedNodeIds, linkedProjectQuery.data?.units), [linkedProjectQuery.data?.units, nodes, selectedNodeIds]);
+    // 扩展节点（对比/图表/调色）要读自己的上游才能渲染，经 Context 下发；
+    // 取上游复用 canvas-resource-references 的实现，别在这里另写一份。必须 memo——
+    // 每帧新对象会让所有节点跟着重渲染，错题本里多条崩溃都出在画布高频更新。
+    const nodeGraphContext = useMemo<CanvasNodeGraphContextValue>(() => ({ getUpstreamNodes: (nodeId: string) => getContextResourceNodes(nodeId, nodes, connections) }), [connections, nodes]);
 
     const {
         applyGenerationTaskResult,
         bindGenerationTask,
-        cancelNodeTask,
-        confirmStopGeneration,
         finishGenerationRequest,
         openNodeTaskDetails,
         runningNodeId,
@@ -1444,6 +1450,42 @@ function InfiniteCanvasPage() {
         [message, releaseCopiedNodesPastePriority],
     );
 
+    const uploadNodeImageToArkPrivateAsset = useCallback(async (node: CanvasNodeData) => {
+        if (node.type !== CanvasNodeType.Image || !node.metadata?.content) {
+            message.warning("请选择一张可用图片后再上传");
+            return;
+        }
+        if (arkPrivateAssetUploadNodeId === node.id) return;
+        const feedbackKey = `ark-private-asset-${node.id}`;
+        setArkPrivateAssetUploadNodeId(node.id);
+        message.loading({ key: feedbackKey, content: "正在保存并上传到方舟素材库...", duration: 0 });
+        try {
+            let resourceID = resourceIdFromStorageKey(node.metadata.storageKey);
+            if (!resourceID) {
+                const uploaded = await uploadImage(node.metadata.content);
+                resourceID = resourceIdFromStorageKey(uploaded.storageKey);
+                if (!resourceID) throw new Error("图片未能保存到系统素材库，请检查对象存储配置后重试");
+                handleConfigNodeChange(node.id, imageMetadata(uploaded));
+            }
+            await syncResourceToArkPrivateAsset(resourceID);
+            message.success({ key: feedbackKey, content: "已同步到方舟素材库，Seedance 将自动复用该素材", duration: 4 });
+        } catch (error) {
+            message.error({ key: feedbackKey, content: error instanceof Error ? error.message : "上传到方舟素材库失败", duration: 5 });
+        } finally {
+            setArkPrivateAssetUploadNodeId((current) => current === node.id ? null : current);
+        }
+    }, [arkPrivateAssetUploadNodeId, handleConfigNodeChange, message]);
+
+    const confirmUploadNodeImageToArkPrivateAsset = useCallback((node: CanvasNodeData) => {
+        Modal.confirm({
+            title: "上传到方舟素材库",
+            content: "仅可上传你拥有肖像、版权或其他合法使用权的图片。方舟审核通过后，Seedance 会使用受控素材标识生成视频。",
+            okText: "确认拥有使用权并上传",
+            cancelText: "取消",
+            onOk: () => uploadNodeImageToArkPrivateAsset(node),
+        });
+    }, [uploadNodeImageToArkPrivateAsset]);
+
     const handleCanvasContextMenu = useCallback(
         (event: ReactMouseEvent) => {
             const target = event.target instanceof Element ? event.target : null;
@@ -1498,7 +1540,7 @@ function InfiniteCanvasPage() {
         generateNodeRef.current = handleGenerateNode;
     }, [handleGenerateNode]);
 
-    const { cancelSubmittedBatchItem, enqueueGenerationBatch, retryFailedBatchItems, stopRemainingBatchItems } = useCanvasGenerationBatches({
+    const { enqueueGenerationBatch, retryFailedBatchItems, stopRemainingBatchItems } = useCanvasGenerationBatches({
         projectId,
         projectLoaded,
         nodes,
@@ -1621,7 +1663,6 @@ function InfiniteCanvasPage() {
                     onPromptChange={handleNodePromptChange}
                     onConfigChange={handleConfigNodeChange}
                     onGenerate={handleGenerateNode}
-                    onStop={confirmStopGeneration}
                     workspaceMode={workspaceMode}
                     onImageSettingsOpenChange={(open) => {
                         setNodeImageSettingsOpen(open);
@@ -1630,7 +1671,7 @@ function InfiniteCanvasPage() {
                 />
             );
         },
-        [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, runningNodeId, skillMentionReferences, workspaceMode],
+        [configInputsById, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, runningNodeId, skillMentionReferences, workspaceMode],
     );
 
     const renderCanvasNodeContent = useCallback(
@@ -1665,7 +1706,6 @@ function InfiniteCanvasPage() {
                         onRetryBatch={(batchId) => retryFailedBatchItems(contentNode.id, batchId)}
                         onRetryBatchItem={(batchId, itemId) => retryFailedBatchItems(contentNode.id, batchId, itemId)}
                         onStopBatch={(batchId) => stopRemainingBatchItems(contentNode.id, batchId)}
-                        onCancelBatchItem={(batchId, itemId) => cancelSubmittedBatchItem(contentNode.id, batchId, itemId)}
                         onAddRow={() => addScriptRow(contentNode.id)}
                         onRemoveRow={(rowId) => removeScriptRow(contentNode.id, rowId)}
                         onUpdateRow={(rowId, patch) => updateScriptRow(contentNode.id, rowId, patch)}
@@ -1704,7 +1744,6 @@ function InfiniteCanvasPage() {
                     inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
                     onConfigChange={handleConfigNodeChange}
                     onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
-                    onStop={confirmStopGeneration}
                     onGenerate={(nodeId) => {
                         const target = nodesRef.current.find((item) => item.id === nodeId);
                         void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.composerContent ?? target?.metadata?.prompt ?? "");
@@ -1715,9 +1754,7 @@ function InfiniteCanvasPage() {
         },
         [
             addScriptRow,
-            cancelSubmittedBatchItem,
             configInputsById,
-            confirmStopGeneration,
             createAndGenerateScriptVideos,
             createScriptActionBoards,
             createScriptImageNodes,
@@ -1844,8 +1881,6 @@ function InfiniteCanvasPage() {
                     {!focusMode ? (
                         <CanvasTopBar
                             title={currentProject?.title || "未命名画布"}
-                            workspaceMode={workspaceMode}
-                            onWorkspaceModeChange={setWorkspaceMode}
                             titleDraft={titleDraft}
                             isTitleEditing={titleEditing}
                             onTitleDraftChange={setTitleDraft}
@@ -1882,6 +1917,19 @@ function InfiniteCanvasPage() {
                             onEnterFocusMode={enterFocusMode}
                             shortDramaGuide={shortDramaGuide}
                         />
+                    ) : null}
+
+                    {!focusMode ? (
+                        <div
+                            data-canvas-no-zoom
+                            className="pointer-events-none absolute bottom-[calc(var(--canvas-inset-y)+var(--space-16))] z-[var(--z-toolbar)] transition-[right,bottom] duration-300 lg:bottom-[var(--canvas-inset-y)]"
+                            style={{ right: assistantMounted ? `calc(var(--canvas-inset-x) + ${assistantWidth}px + var(--space-3))` : "var(--canvas-inset-x)" }}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onWheel={(event) => event.stopPropagation()}
+                        >
+                            <CanvasWorkspaceModeSwitch mode={workspaceMode} onChange={setWorkspaceMode} />
+                        </div>
                     ) : null}
 
                     <CanvasNodeSearchModal
@@ -1950,78 +1998,79 @@ function InfiniteCanvasPage() {
                                 onFileDragLeave={handleFileDragLeave}
                                 onFileDragOver={handleFileDragOver}
                             >
-                                <CanvasNodeActionContext.Provider value={{ download: downloadNodeImage, duplicate: (node) => duplicateNode(node.id), deleteNode: (node) => deleteNodes(new Set([node.id])) }}>
-                                    <CanvasProjectWorldLayers
-                                        projectId={projectId}
-                                        viewportScale={viewport.k}
-                                        connectionLayerBounds={connectionLayerBounds}
-                                        displayConnections={displayConnections}
-                                        selectedConnectionId={selectedConnectionId}
-                                        relatedConnectionIds={relatedHighlight.connectionIds}
-                                        scriptScrollTopById={scriptScrollTopById}
-                                        connectingParams={connectingParams}
-                                        mouseWorld={mouseWorld}
-                                        connectionTargetNodeId={connectionTargetNodeId}
-                                        nodeById={nodeById}
-                                        visibleNodes={visibleNodes}
-                                        frameChildrenById={frameChildrenById}
-                                        linkedFolderPreviewNodesById={linkedFolderPreviewNodesById}
-                                        dragPreview={dragPreview}
-                                        selectedNodeIds={selectedNodeIds}
-                                        frameDropTargetId={frameDropTargetId}
-                                        relatedNodeIds={relatedHighlight.nodeIds}
-                                        activeNodeId={activeNodeId}
-                                        selectionBox={selectionBox}
-                                        batchChildCountById={batchChildCountById}
-                                        collapsingBatchIds={collapsingBatchIds}
-                                        openingBatchIds={openingBatchIds}
-                                        batchMotionById={batchMotionById}
-                                        showImageInfo={showImageInfo}
-                                        reduceMediaEffects={reduceMediaEffects}
-                                        resourceReferenceByNodeId={resourceReferenceByNodeId}
-                                        mentionReferencesByNodeId={mentionReferencesByNodeId}
-                                        mediaEffectsDisabledNodeId={emotionNodeId}
-                                        selectedNodeBounds={selectedNodeBounds}
-                                        batchSourceNodeIds={batchSourceNodeIds}
-                                        batchConnectionPreview={batchConnectionPreview}
-                                        isNodeDragging={isNodeDragging}
-                                        selectionBoundsElementRef={selectionBoundsElementRef}
-                                        renderCanvasNodeContent={renderCanvasNodeContent}
-                                        onConnectionSelect={(connectionId) => {
-                                            setSelectedConnectionId(connectionId);
-                                            setSelectedNodeIds(new Set());
-                                            setContextMenu(null);
-                                        }}
-                                        onConnectionContextMenu={(event, connectionId) => {
-                                            setSelectedConnectionId(connectionId);
-                                            setSelectedNodeIds(new Set());
-                                            closeConnectionCreateMenu();
-                                            setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId });
-                                        }}
-                                        onNodeMouseDown={handleNodeMouseDown}
-                                        onNodeHoverStart={handleCanvasNodeHoverStart}
-                                        onNodeHoverEnd={handleCanvasNodeHoverEnd}
-                                        onConnectStart={handleConnectStart}
-                                        onNodeResize={handleNodeResize}
-                                        onToggleFrame={handleFrameToggle}
-                                        onFolderStyleChange={handleFolderStyleChange}
-                                        onFolderThemeChange={handleFolderThemeChange}
-                                        onNodeTitleChange={handleNodeTitleChange}
-                                        onNodeContextMenu={handleNodeContextMenu}
-                                        onNodeContentChange={handleNodeContentChange}
-                                        onToggleBatch={toggleBatchExpanded}
-                                        onSetBatchPrimary={setBatchPrimary}
-                                        onRetry={retryCanvasNode}
-                                        onCancelTask={cancelNodeTask}
-                                        onOpenTaskDetails={openCanvasNodeTaskDetails}
-                                        onOpenVersions={openCanvasNodeVersions}
-                                        onViewImage={viewCanvasNodeImage}
-                                        onReplaceMedia={replaceCanvasNodeMedia}
-                                        onOpenTextEditor={openTextNodeEditor}
-                                        onOpenDirector={editCanvasDirector}
-                                        onOpenDrawing={openDrawingNode}
-                                        onStartBatchConnection={startBatchConnection}
-                                    />
+                                <CanvasNodeActionContext.Provider value={{ download: downloadNodeImage, duplicate: (node) => duplicateNode(node.id), deleteNode: (node) => deleteNodes(new Set([node.id])), updateMetadata: (nodeId, patch) => setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...patch } } : node))), resizeNode: (nodeId, size) => setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, width: size.width, height: size.height } : node))) }}>
+                                    <CanvasNodeGraphContext.Provider value={nodeGraphContext}>
+                                        <CanvasProjectWorldLayers
+                                            projectId={projectId}
+                                            viewportScale={viewport.k}
+                                            connectionLayerBounds={connectionLayerBounds}
+                                            displayConnections={displayConnections}
+                                            selectedConnectionId={selectedConnectionId}
+                                            relatedConnectionIds={relatedHighlight.connectionIds}
+                                            scriptScrollTopById={scriptScrollTopById}
+                                            connectingParams={connectingParams}
+                                            mouseWorld={mouseWorld}
+                                            connectionTargetNodeId={connectionTargetNodeId}
+                                            nodeById={nodeById}
+                                            visibleNodes={visibleNodes}
+                                            frameChildrenById={frameChildrenById}
+                                            linkedFolderPreviewNodesById={linkedFolderPreviewNodesById}
+                                            dragPreview={dragPreview}
+                                            selectedNodeIds={selectedNodeIds}
+                                            frameDropTargetId={frameDropTargetId}
+                                            relatedNodeIds={relatedHighlight.nodeIds}
+                                            activeNodeId={activeNodeId}
+                                            selectionBox={selectionBox}
+                                            batchChildCountById={batchChildCountById}
+                                            collapsingBatchIds={collapsingBatchIds}
+                                            openingBatchIds={openingBatchIds}
+                                            batchMotionById={batchMotionById}
+                                            showImageInfo={showImageInfo}
+                                            reduceMediaEffects={reduceMediaEffects}
+                                            resourceReferenceByNodeId={resourceReferenceByNodeId}
+                                            mentionReferencesByNodeId={mentionReferencesByNodeId}
+                                            mediaEffectsDisabledNodeId={emotionNodeId}
+                                            selectedNodeBounds={selectedNodeBounds}
+                                            batchSourceNodeIds={batchSourceNodeIds}
+                                            batchConnectionPreview={batchConnectionPreview}
+                                            isNodeDragging={isNodeDragging}
+                                            selectionBoundsElementRef={selectionBoundsElementRef}
+                                            renderCanvasNodeContent={renderCanvasNodeContent}
+                                            onConnectionSelect={(connectionId) => {
+                                                setSelectedConnectionId(connectionId);
+                                                setSelectedNodeIds(new Set());
+                                                setContextMenu(null);
+                                            }}
+                                            onConnectionContextMenu={(event, connectionId) => {
+                                                setSelectedConnectionId(connectionId);
+                                                setSelectedNodeIds(new Set());
+                                                closeConnectionCreateMenu();
+                                                setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId });
+                                            }}
+                                            onNodeMouseDown={handleNodeMouseDown}
+                                            onNodeHoverStart={handleCanvasNodeHoverStart}
+                                            onNodeHoverEnd={handleCanvasNodeHoverEnd}
+                                            onConnectStart={handleConnectStart}
+                                            onNodeResize={handleNodeResize}
+                                            onToggleFrame={handleFrameToggle}
+                                            onFolderStyleChange={handleFolderStyleChange}
+                                            onFolderThemeChange={handleFolderThemeChange}
+                                            onNodeTitleChange={handleNodeTitleChange}
+                                            onNodeContextMenu={handleNodeContextMenu}
+                                            onNodeContentChange={handleNodeContentChange}
+                                            onToggleBatch={toggleBatchExpanded}
+                                            onSetBatchPrimary={setBatchPrimary}
+                                            onRetry={retryCanvasNode}
+                                            onOpenTaskDetails={openCanvasNodeTaskDetails}
+                                            onOpenVersions={openCanvasNodeVersions}
+                                            onViewImage={viewCanvasNodeImage}
+                                            onReplaceMedia={replaceCanvasNodeMedia}
+                                            onOpenTextEditor={openTextNodeEditor}
+                                            onOpenDirector={editCanvasDirector}
+                                            onOpenDrawing={openDrawingNode}
+                                            onStartBatchConnection={startBatchConnection}
+                                        />
+                                    </CanvasNodeGraphContext.Provider>
                                 </CanvasNodeActionContext.Provider>
                             </InfiniteCanvas>
 
@@ -2069,6 +2118,7 @@ function InfiniteCanvasPage() {
                                     onAddFrame={() => createNode(CanvasNodeType.Frame)}
                                     onAddFolder={createFolder}
                                     onAddDrawing={() => createNode(CanvasNodeType.Drawing)}
+                                    onAddExtensionNode={(type) => createNode(type)}
                                     onOpenDirector={() => createDirectorShot()}
                                     onUndo={undoCanvas}
                                     onRedo={redoCanvas}
@@ -2242,7 +2292,7 @@ function InfiniteCanvasPage() {
                     {!focusMode ? (
                         <div
                             data-canvas-no-zoom
-                            className="absolute bottom-[calc(var(--canvas-inset-y)+var(--space-16))] left-4 z-[var(--z-panel)] flex items-end gap-2 lg:bottom-[var(--canvas-inset-y)]"
+                            className="absolute bottom-[calc(var(--canvas-inset-y)+var(--space-16))] left-[var(--canvas-inset-x)] z-[var(--z-panel)] flex items-end gap-2 lg:bottom-[var(--canvas-inset-y)]"
                             onMouseDown={(event) => event.stopPropagation()}
                             onPointerDown={(event) => event.stopPropagation()}
                             onWheel={(event) => event.stopPropagation()}
@@ -2304,6 +2354,7 @@ function InfiniteCanvasPage() {
                         onCopyMediaUrl={(node) => {
                             void copyNodeMediaUrlToClipboard(node);
                         }}
+                        onUploadToArkPrivateAsset={confirmUploadNodeImageToArkPrivateAsset}
                         onSetAssetCategory={(nodeId, assetCategory) => handleConfigNodeChange(nodeId, { assetCategory })}
                         onToggleFrame={(node) => handleFrameToggle(node.id)}
                     />

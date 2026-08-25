@@ -35,3 +35,28 @@ describe("media fallback", () => {
         expect(page).toContain("onUnavailable={() => setUnavailableUrl(url)}");
     });
 });
+
+describe("task cancellation policy", () => {
+    test("does not expose cancellation after a task is created", () => {
+        const list = source("../src/pages/tasks/task-list-row.tsx");
+        const grid = source("../src/pages/tasks/task-grid-card.tsx");
+        const page = source("../src/pages/tasks/index.tsx");
+
+        expect(list).not.toContain("isTaskCancellable");
+        expect(list).not.toContain("取消任务");
+        expect(grid).not.toContain("isTaskCancellable");
+        expect(grid).not.toContain("取消任务");
+        expect(page).not.toContain("cancelGenerationTask");
+        expect(page).not.toContain('runAction(detailTask.id, "cancel")');
+        expect(page).toContain('if (task.status === "queued" || task.status === "running")');
+        expect(page).toContain("任务正在执行，不能删除本机记录");
+    });
+
+    test("batch stop only applies to items still waiting locally", () => {
+        const batches = source("../src/pages/canvas/use-canvas-generation-batches.ts");
+
+        expect(batches).toContain('item.status === "waiting" && !nodeById.get(item.nodeId)?.metadata?.taskId');
+        expect(batches).toContain('item.status === "waiting" && stoppableItems.some((candidate) => candidate.id === item.id)');
+        expect(batches).not.toContain('item.status === "waiting" || item.status === "submitting"');
+    });
+});

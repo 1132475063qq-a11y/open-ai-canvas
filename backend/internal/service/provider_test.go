@@ -42,6 +42,50 @@ func TestProviderRequestErrorDetails(t *testing.T) {
 	}
 }
 
+func TestChannelAPIURLNormalizesConfiguredVersionPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		base string
+		path string
+		want string
+	}{
+		{name: "host", base: "http://provider.test:8000", path: "/chat/completions", want: "http://provider.test:8000/v1/chat/completions"},
+		{name: "host slash", base: "http://provider.test:8000/", path: "/chat/completions", want: "http://provider.test:8000/v1/chat/completions"},
+		{name: "v1", base: "http://provider.test:8000/v1", path: "/chat/completions", want: "http://provider.test:8000/v1/chat/completions"},
+		{name: "v1 slash", base: "http://provider.test:8000/v1/", path: "/chat/completions", want: "http://provider.test:8000/v1/chat/completions"},
+		{name: "path carries v1beta", base: "http://provider.test:8000", path: "/v1beta/models/model", want: "http://provider.test:8000/v1beta/models/model"},
+		{name: "same v1beta is not duplicated", base: "http://provider.test:8000/v1beta", path: "/v1beta/models/model", want: "http://provider.test:8000/v1beta/models/model"},
+		{name: "path carries v2", base: "http://provider.test:8000/v1", path: "/v2/tasks", want: "http://provider.test:8000/v2/tasks"},
+		{name: "ark v3", base: "https://ark.example.com/api/v3", path: "/images/generations", want: "https://ark.example.com/api/v3/images/generations"},
+		{name: "path carries ark v3", base: "https://ark.example.com", path: "/api/v3/images/generations", want: "https://ark.example.com/api/v3/images/generations"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ChannelAPIURL(tt.base, tt.path); got != tt.want {
+				t.Fatalf("ChannelAPIURL(%q, %q) = %q, want %q", tt.base, tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestChannelAPIURLForProtocolUsesGeminiDefault(t *testing.T) {
+	if got := ChannelAPIURLForProtocol("https://generativelanguage.googleapis.com", "/models/gemini:generateContent", model.ChannelInterfaceGeminiVeo); got != "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent" {
+		t.Fatalf("Gemini URL = %q", got)
+	}
+}
+
+func TestSystemChannelIDFromBaseURLSupportsShortAndLegacyProxyPaths(t *testing.T) {
+	for _, test := range []struct{ base, want string }{
+		{base: "/api/channel-1", want: "channel-1"},
+		{base: "/api/ai/system/channel-2", want: "channel-2"},
+		{base: "https://canvas.example.com/api/channel-3", want: "channel-3"},
+	} {
+		if got := systemChannelIDFromBaseURL(test.base); got != test.want {
+			t.Fatalf("systemChannelIDFromBaseURL(%q) = %q, want %q", test.base, got, test.want)
+		}
+	}
+}
+
 func TestWriteMediaPartSanitizesFilenameAndSetsMimeType(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -105,6 +149,17 @@ data: [DONE]
 	if got, err := parseTextEventStream(chat, "chat-completion"); err != nil || got != "第一镜：远景" {
 		t.Fatalf("Chat stream = %q, err = %v", got, err)
 	}
+
+	claude := []byte(`event: content_block_delta
+data: {"delta":{"type":"text_delta","text":"第一镜"}}
+
+event: content_block_delta
+data: {"delta":{"type":"text_delta","text":"：远景"}}
+
+`)
+	if got, err := parseTextEventStream(claude, "claude-api"); err != nil || got != "第一镜：远景" {
+		t.Fatalf("Claude stream = %q, err = %v", got, err)
+	}
 }
 
 func TestParseAgentToolPayloadSupportsChatCompletions(t *testing.T) {
@@ -164,6 +219,59 @@ func TestParseAgentToolPayloadSupportsResponses(t *testing.T) {
 	}
 }
 
+func TestParseAgentToolPayloadSupportsClaude(t *testing.T) {
+	result, err := parseAgentToolPayload(map[string]interface{}{
+		"content": []interface{}{
+			map[string]interface{}{"type": "text", "text": "开始操作"},
+			map[string]interface{}{"type": "tool_use", "id": "call-3", "name": "canvas_get_state", "input": map[string]interface{}{}},
+		},
+	}, "claude-api")
+	if err != nil {
+		t.Fatalf("parseAgentToolPayload() error = %v", err)
+	}
+	if result["text"] != "开始操作" {
+		t.Fatalf("text = %v", result["text"])
+	}
+	calls, _ := result["toolCalls"].([]interface{})
+	if len(calls) != 1 {
+		t.Fatalf("toolCalls = %#v", result["toolCalls"])
+	}
+	call, _ := calls[0].(map[string]interface{})
+	function, _ := call["function"].(map[string]interface{})
+	if call["id"] != "call-3" || function["name"] != "canvas_get_state" || function["arguments"] != "{}" {
+		t.Fatalf("tool call = %#v", call)
+	}
+}
+
+func TestClaudeAgentBodyMapsOpenAIStyleTools(t *testing.T) {
+	body := claudeAgentBody(map[string]interface{}{
+		"messages": []interface{}{
+			map[string]interface{}{"role": "system", "content": "You are concise."},
+			map[string]interface{}{"role": "user", "content": "读取画布"},
+			map[string]interface{}{"role": "assistant", "content": nil, "tool_calls": []interface{}{map[string]interface{}{
+				"id": "call-4", "function": map[string]interface{}{"name": "canvas_get_state", "arguments": `{}`},
+			}}},
+			map[string]interface{}{"role": "tool", "tool_call_id": "call-4", "content": `{"nodes":[]}`},
+		},
+		"tools": []interface{}{map[string]interface{}{"type": "function", "function": map[string]interface{}{
+			"name": "canvas_get_state", "description": "读取画布", "parameters": map[string]interface{}{"type": "object"},
+		}}},
+		"tool_choice": "required",
+	})
+	if body["system"] != "You are concise." || body["max_tokens"] != 4096 {
+		t.Fatalf("body = %#v", body)
+	}
+	messages, _ := body["messages"].([]interface{})
+	if len(messages) != 3 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	tools, _ := body["tools"].([]interface{})
+	tool, _ := tools[0].(map[string]interface{})
+	if tool["name"] != "canvas_get_state" || body["tool_choice"].(map[string]interface{})["type"] != "any" {
+		t.Fatalf("tools/choice = %#v / %#v", body["tools"], body["tool_choice"])
+	}
+}
+
 func TestRunAgentToolTaskFallsBackToolChoice(t *testing.T) {
 	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
 	var choices []interface{}
@@ -187,8 +295,8 @@ func TestRunAgentToolTaskFallsBackToolChoice(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := providerConfig{BaseURL: server.URL, APIKey: "key", Model: "thinking-model", AllowLocalChannel: true}
-	result, err := runAgentToolTask(withProviderOutboundPolicy(context.Background(), config), canvasGenerationInput{
+	config := providerConfig{BaseURL: server.URL, APIKey: "key", Model: "thinking-model"}
+	result, err := runAgentToolTask(context.Background(), canvasGenerationInput{
 		Config:        config,
 		AgentRequests: &agentToolRequests{ChatCompletion: map[string]interface{}{"messages": []interface{}{}, "tool_choice": "required"}},
 	})
@@ -235,6 +343,44 @@ func TestProviderHTTPErrorWarnsAboutUncertain524Billing(t *testing.T) {
 	message := (providerHTTPError{StatusCode: 524, Status: "524 A Timeout Occurred"}).Error()
 	if !strings.Contains(message, "可能仍在服务端执行并产生费用") || !strings.Contains(message, "请勿立即重试") {
 		t.Fatalf("providerHTTPError.Error() = %q", message)
+	}
+}
+
+func TestProviderHTTPErrorDoesNotExposeResponseBody(t *testing.T) {
+	message := (providerHTTPError{
+		StatusCode: http.StatusBadGateway,
+		Status:     "502 Bad Gateway",
+		Body:       `{"error":{"message":"api-key=secret"}}`,
+	}).Error()
+	if strings.Contains(message, "api-key") || strings.Contains(message, "secret") || strings.Contains(message, `{"error"`) {
+		t.Fatalf("providerHTTPError exposed upstream response body: %q", message)
+	}
+	if !strings.Contains(message, "HTTP 502") {
+		t.Fatalf("providerHTTPError.Error() = %q", message)
+	}
+}
+
+func TestProviderPayloadErrorMessageUsesSafeActionableCategories(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "moderation", raw: "request blocked by content policy: prompt=private", want: "安全审核"},
+		{name: "quota", raw: "insufficient quota for api-key=secret", want: "额度不足"},
+		{name: "model access", raw: "model not found for tenant secret-id", want: "模型不存在"},
+		{name: "unknown", raw: "trace_id=private internal stack", want: "模型服务返回失败"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			message := providerPayloadErrorMessage(tt.raw)
+			if !strings.Contains(message, tt.want) {
+				t.Fatalf("providerPayloadErrorMessage() = %q, want category %q", message, tt.want)
+			}
+			if strings.Contains(message, "secret") || strings.Contains(message, "private") {
+				t.Fatalf("provider payload detail leaked: %q", message)
+			}
+		})
 	}
 }
 
@@ -639,17 +785,17 @@ func TestGrokImageRequestBodyPrefersPublicURL(t *testing.T) {
 
 func TestNormalizePixelSizeConvertsCanvasAspectRatios(t *testing.T) {
 	tests := map[string]string{
-		"1:1":  "1024x1024",
-		"3:2":  "1536x1024",
-		"2:3":  "1024x1536",
-		"4:3":  "1360x1024",
-		"3:4":  "1024x1360",
-		"16:9": "1824x1024",
-		"9:16": "1024x1824",
-		"21:9": "2352x1008",
-		"2160×3840": "2160x3840",
+		"1:1":           "1024x1024",
+		"3:2":           "1536x1024",
+		"2:3":           "1024x1536",
+		"4:3":           "1360x1024",
+		"3:4":           "1024x1360",
+		"16:9":          "1824x1024",
+		"9:16":          "1024x1824",
+		"21:9":          "2352x1008",
+		"2160×3840":     "2160x3840",
 		" 2160 x 3840 ": "2160x3840",
-		"2160 X 3840": "2160x3840",
+		"2160 X 3840":   "2160x3840",
 	}
 	for input, want := range tests {
 		t.Run(input, func(t *testing.T) {
@@ -1335,12 +1481,19 @@ func TestVolcengineArkVideoProtocolUsesContentTaskAndDownloadsResult(t *testing.
 				t.Fatalf("decode request: %v", err)
 			}
 			content, _ := body["content"].([]interface{})
-			if len(content) != 2 {
+			if len(content) != 4 {
 				t.Errorf("body = %#v", body)
 				return
 			}
-			imageContent, _ := content[1].(map[string]interface{})
-			if body["model"] != "doubao-seedance-test" || imageContent["role"] != "reference_image" {
+			wantTypes := []string{"text", "image_url", "video_url", "audio_url"}
+			wantRoles := []string{"", "reference_image", "reference_video", "reference_audio"}
+			for index, item := range content {
+				entry, _ := item.(map[string]interface{})
+				if entry["type"] != wantTypes[index] || (wantRoles[index] != "" && entry["role"] != wantRoles[index]) {
+					t.Errorf("content[%d] = %#v", index, entry)
+				}
+			}
+			if body["model"] != "doubao-seedance-test" {
 				t.Errorf("body = %#v", body)
 			}
 			_, _ = w.Write([]byte(`{"id":"ark-task-1","status":"running"}`))
@@ -1359,6 +1512,8 @@ func TestVolcengineArkVideoProtocolUsesContentTaskAndDownloadsResult(t *testing.
 		Prompt:          "make it move",
 		Config:          providerConfig{BaseURL: server.URL + "/api/v3", APIKey: "test-key", Model: "doubao-seedance-test", InterfaceType: "volcengine-ark-video"},
 		ReferenceImages: []providerMedia{{ID: "start", URL: server.URL + "/reference.png"}},
+		ReferenceVideos: []providerMedia{{ID: "motion", URL: server.URL + "/reference.mp4"}},
+		ReferenceAudios: []providerMedia{{ID: "music", URL: server.URL + "/reference.mp3"}},
 		Metadata:        map[string]interface{}{"videoStartFrameNodeId": "start"},
 	})
 	if err != nil {

@@ -1,5 +1,5 @@
 import { Button, Tooltip } from "antd";
-import { Eye, FileText, FolderKanban, Image as ImageIcon, Play, RotateCcw, Video, X } from "lucide-react";
+import { Eye, FileText, FolderKanban, Image as ImageIcon, Play, RotateCcw, Video } from "lucide-react";
 import { useState } from "react";
 
 import { MediaPreview } from "@/components/media-preview";
@@ -18,7 +18,6 @@ export function TaskListRow({
     actingId,
     onOpen,
     onRetry,
-    onCancel,
     onPreview,
 }: {
     task: GenerationTask;
@@ -29,7 +28,6 @@ export function TaskListRow({
     actingId: string;
     onOpen: () => void;
     onRetry: () => void;
-    onCancel: () => void;
     onPreview: () => void;
 }) {
     const context = getTaskCanvasContext(task, canvasById, projectNameById);
@@ -92,11 +90,6 @@ export function TaskListRow({
                             disabled={task.errorCode === CONTENT_MODERATION_ERROR_CODE || isContentModerationError(task.error)}
                             onClick={onRetry}
                         />
-                    </Tooltip>
-                ) : null}
-                {isActive ? (
-                    <Tooltip title="取消任务">
-                        <Button type="text" size="small" danger icon={<X className="size-3.5" />} aria-label="取消任务" loading={actingId === task.id} onClick={onCancel} />
                     </Tooltip>
                 ) : null}
             </div>

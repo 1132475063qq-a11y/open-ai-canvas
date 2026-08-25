@@ -27,6 +27,8 @@ var ErrTextReplayClosed = errors.New("text replay task is closed")
 
 var ErrProjectAssetFolderNotEmpty = errors.New("project asset folder is not empty")
 
+var ErrProjectHasActiveTasks = errors.New("project has active tasks")
+
 type Repository struct {
 	db *gorm.DB
 }
@@ -319,6 +321,17 @@ func (r *Repository) TaskForUser(userID string, id string) (*model.Task, error) 
 func (r *Repository) ActiveTaskCountForUser(userID string) (int64, error) {
 	var count int64
 	err := r.db.Model(&model.Task{}).Where("user_id = ? AND status IN ?", userID, []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}).Count(&count).Error
+	return count, err
+}
+
+func (r *Repository) ActiveTaskCountForProjectIDs(userID string, projectIDs []string) (int64, error) {
+	if len(projectIDs) == 0 {
+		return 0, nil
+	}
+	var count int64
+	err := r.db.Model(&model.Task{}).
+		Where("user_id = ? AND project_id IN ? AND status IN ?", userID, projectIDs, []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}).
+		Count(&count).Error
 	return count, err
 }
 
@@ -848,6 +861,32 @@ func (r *Repository) SaveSystemSettings(settings ...*model.SystemSetting) error 
 	})
 }
 
+func (r *Repository) ArkPrivateAssetBinding(resourceID string, projectName string) (*model.ArkPrivateAssetBinding, error) {
+	var binding model.ArkPrivateAssetBinding
+	if err := r.db.Where("resource_id = ? AND project_name = ?", resourceID, projectName).First(&binding).Error; err != nil {
+		return nil, err
+	}
+	return &binding, nil
+}
+
+// CreateArkPrivateAssetBinding establishes a single uploader for a resource
+// and Ark Project. Other workers can wait for that binding instead of
+// importing the same image repeatedly.
+func (r *Repository) CreateArkPrivateAssetBinding(binding *model.ArkPrivateAssetBinding) (bool, error) {
+	result := r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "resource_id"}, {Name: "project_name"}},
+		DoNothing: true,
+	}).Create(binding)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *Repository) SaveArkPrivateAssetBinding(binding *model.ArkPrivateAssetBinding) error {
+	return r.db.Save(binding).Error
+}
+
 func (r *Repository) DeleteSystemSetting(key string) error {
 	return r.db.Delete(&model.SystemSetting{}, "key = ?", key).Error
 }
@@ -929,6 +968,10 @@ func (r *Repository) CreateResource(resource *model.Resource) error {
 
 func (r *Repository) SaveResource(resource *model.Resource) error {
 	return r.db.Save(resource).Error
+}
+
+func (r *Repository) DeleteResource(userID string, id string) error {
+	return r.db.Delete(&model.Resource{}, "id = ? AND user_id = ?", id, userID).Error
 }
 
 func (r *Repository) Resource(id string) (*model.Resource, error) {
@@ -1042,6 +1085,19 @@ func (r *Repository) Projects(userID string) ([]model.Project, error) {
 	return projects, err
 }
 
+func (r *Repository) ProjectsPage(userID string, page int, pageSize int) ([]model.Project, int64, error) {
+	var projects []model.Project
+	var total int64
+	query := r.db.Model(&model.Project{}).Where("user_id = ?", userID)
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := query.Order("updated_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&projects).Error; err != nil {
+		return nil, 0, err
+	}
+	return projects, total, nil
+}
+
 func (r *Repository) ProjectForUser(userID string, id string) (*model.Project, error) {
 	var project model.Project
 	if err := r.db.First(&project, "id = ? AND user_id = ?", id, userID).Error; err != nil {
@@ -1062,13 +1118,47 @@ func (r *Repository) UpdateProject(project *model.Project) error {
 	}).Error
 }
 
-func (r *Repository) DeleteProject(userID string, id string) error {
+func (r *Repository) DeleteProject(userID string, id string, canvasUpdates []model.CanvasProject) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.CanvasProject{}).Where("user_id = ? AND project_id = ?", userID, id).Update("project_id", "").Error; err != nil {
+		var canvasIDs []string
+		if err := tx.Model(&model.CanvasProject{}).
+			Where("user_id = ? AND project_id = ?", userID, id).
+			Pluck("id", &canvasIDs).Error; err != nil {
+			return err
+		}
+		projectScopeIDs := append([]string{id}, canvasIDs...)
+		var activeTaskCount int64
+		if err := tx.Model(&model.Task{}).
+			Where("user_id = ? AND project_id IN ? AND status IN ?", userID, projectScopeIDs, []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}).
+			Count(&activeTaskCount).Error; err != nil {
+			return err
+		}
+		if activeTaskCount > 0 {
+			return ErrProjectHasActiveTasks
+		}
+		if err := tx.Where("user_id = ? AND project_id = ?", userID, id).Delete(&model.CanvasShare{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&model.CanvasUnitLink{}).Error; err != nil {
 			return err
+		}
+		for _, canvas := range canvasUpdates {
+			result := tx.Model(&model.CanvasProject{}).
+				Where("id = ? AND user_id = ? AND project_id = ?", canvas.ID, userID, id).
+				Updates(map[string]any{"project_id": "", "payload_json": canvas.PayloadJSON, "updated_at": canvas.UpdatedAt})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return gorm.ErrRecordNotFound
+			}
+		}
+		var remainingCanvasCount int64
+		if err := tx.Model(&model.CanvasProject{}).Where("user_id = ? AND project_id = ?", userID, id).Count(&remainingCanvasCount).Error; err != nil {
+			return err
+		}
+		if remainingCanvasCount != 0 {
+			return fmt.Errorf("项目删除时仍有 %d 个画布关联未处理", remainingCanvasCount)
 		}
 		shotIDs := tx.Model(&model.Shot{}).Select("id").Where("project_id = ?", id)
 		if err := tx.Where("shot_id IN (?)", shotIDs).Delete(&model.ShotAssetReference{}).Error; err != nil {
@@ -1098,6 +1188,12 @@ func (r *Repository) DeleteProject(userID string, id string) error {
 			return err
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&model.ProjectUnit{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Task{}).Where("user_id = ? AND project_id = ?", userID, id).Update("project_id", "").Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Session{}).Where("user_id = ? AND project_id = ?", userID, id).Update("project_id", "").Error; err != nil {
 			return err
 		}
 		return tx.Delete(&model.Project{}, "id = ? AND user_id = ?", id, userID).Error

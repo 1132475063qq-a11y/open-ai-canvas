@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { createServer, type Server } from "node:http";
+import type { Express } from "express";
 
 import {
     CONFIG_DIR,
@@ -24,6 +25,14 @@ export type StartLocalRuntimeOptions = {
     persistConfig?: (config: LocalRuntimeConfig) => void;
 };
 
+export type LocalRuntimeHost = {
+    app: Express;
+    server: Server;
+    sessions: LocalRuntimeSessionManager;
+    ready: Promise<void>;
+    close: () => Promise<void>;
+};
+
 export function createDefaultLocalRuntimeModules(config: LocalRuntimeConfig): LocalRuntimeModule[] {
     return [
         createCanvasAgentHttpModule(config),
@@ -38,7 +47,7 @@ export function createDefaultLocalRuntimeModules(config: LocalRuntimeConfig): Lo
     ];
 }
 
-export function startLocalRuntime(options: StartLocalRuntimeOptions = {}) {
+export function startLocalRuntime(options: StartLocalRuntimeOptions = {}): LocalRuntimeHost {
     const config = options.config ?? loadConfig(true);
     const persistConfig = options.persistConfig ?? saveConfig;
     const requestedPort = options.port ?? (
@@ -95,7 +104,7 @@ export function startLocalRuntime(options: StartLocalRuntimeOptions = {}) {
             await listening(server);
             log("Framefield Local Runtime");
             log("Runtime is listening on 127.0.0.1");
-            log("Codex MCP: codex mcp add infinite-canvas -- npx -y @ddcat666/open-ai-canvas-agent mcp");
+            log("Codex MCP: codex mcp add yingce -- npx -y @ddcat666/open-ai-canvas-agent mcp");
         } catch (startupError) {
             sessions.dispose();
             const cleanupErrors: unknown[] = [];

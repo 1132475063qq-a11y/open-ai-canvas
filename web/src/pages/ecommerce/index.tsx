@@ -19,7 +19,7 @@ export default function EcommerceProjectsPage() {
     const queryClient = useQueryClient();
     const [createForm] = Form.useForm<EcommerceProjectForm>();
     const [createOpen, setCreateOpen] = useState(false);
-    const query = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+    const query = useQuery({ queryKey: ["projects"], queryFn: () => listProjects() });
     const mutation = useMutation({
         mutationFn: (values: EcommerceProjectForm) => createProject({
             name: values.name.trim(),

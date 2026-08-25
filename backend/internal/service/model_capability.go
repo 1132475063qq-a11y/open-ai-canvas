@@ -206,6 +206,7 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 		video.Duration = VideoDurationConfig{Selection: "enum", Values: []int{4, 6, 8}, Default: 6}
 		video.Resolutions = []string{"720p", "1080p"}
 	case model.ChannelInterfaceVolcengineArkVideo:
+		video.Operations = append(video.Operations, "reference_to_video", "audio_to_video")
 		video.References.MaxVideos, video.References.MaxAudios = 3, 3
 		video.References.MaxVideoBytes, video.References.MaxAudioBytes = 200*1024*1024, 15*1024*1024
 		video.References.MaxVideoDuration, video.References.MaxAudioDuration = 15, 15
@@ -554,7 +555,7 @@ func (s *Service) ValidateTaskCapability(input map[string]any) error {
 		}
 		return validateVideoTask(taskInput.Config.CapabilityConfig.Video, taskInput)
 	}
-	item, err := s.repo.ChannelModelByKey(channelID, strings.TrimPrefix(strings.TrimSpace(taskInput.Config.Model), "models/"))
+	item, err := s.repo.ChannelModelByKey(channelID, providerChannelModelKey(taskInput.Config))
 	if err != nil {
 		return BadAuthRequest("当前系统渠道模型未配置或已停用")
 	}
@@ -563,21 +564,46 @@ func (s *Service) ValidateTaskCapability(input map[string]any) error {
 		if err != nil {
 			return BadAuthRequest("当前图片模型能力参数无效")
 		}
-		imageProfile := DefaultImageCapabilityConfig(string(item.Protocol), item.ModelKey)
+		imageProfile := DefaultImageCapabilityConfig(string(item.Protocol), firstNonEmpty(item.ProviderModelKey, item.ModelKey))
 		if profile != nil && profile.Image != nil {
 			imageProfile = profile.Image
 		}
-		return validateImageTask(imageProfile, taskInput)
+		return validateImageTask(applyModelSpecificImageCapability(imageProfile, string(item.Protocol), firstNonEmpty(item.ProviderModelKey, item.ModelKey), taskInput.Config.APIFormat), taskInput)
 	}
 	if err != nil || profile == nil || profile.Video == nil {
 		return BadAuthRequest("当前视频模型尚未配置能力参数")
 	}
+	applyFixedVideoResolution(&taskInput, profile.Video)
+	if config, ok := input["config"].(map[string]any); ok {
+		config["vquality"] = taskInput.Config.VQuality
+	}
 	return validateVideoTask(profile.Video, taskInput)
+}
+
+// applyModelSpecificImageCapability is retained as a narrow normalization hook
+// for provider-specific image validation. The stored capability profile is
+// already normalized when the channel model is saved, so no second override is
+// needed here.
+func applyModelSpecificImageCapability(profile *ImageCapabilityConfig, _ string, _ string, _ string) *ImageCapabilityConfig {
+	return profile
+}
+
+// applyFixedVideoResolution 让单档位 SKU 的预扣、恢复和上游请求保持同一分辨率。
+func applyFixedVideoResolution(input *canvasGenerationInput, profile *VideoCapabilityConfig) {
+	if input == nil || profile == nil || len(profile.Resolutions) != 1 {
+		return
+	}
+	if resolution := videoResolutionNameRequest(profile, profile.Resolutions[0]); resolution != "" {
+		input.Config.VQuality = resolution
+	}
 }
 
 func validateVideoTask(profile *VideoCapabilityConfig, input canvasGenerationInput) error {
 	if len(input.ReferenceImages) > profile.References.MaxImages || len(input.ReferenceVideos) > profile.References.MaxVideos || len(input.ReferenceAudios) > profile.References.MaxAudios {
 		return BadAuthRequest("参考素材数量超过当前模型限制")
+	}
+	if input.Config.InterfaceType == string(model.ChannelInterfaceVolcengineArkVideo) && len(input.ReferenceAudios) > 0 && len(input.ReferenceImages) == 0 && len(input.ReferenceVideos) == 0 {
+		return BadAuthRequest("火山方舟全模态参考不支持纯音频或文本+音频，请同时添加参考图片或参考视频")
 	}
 	if len(input.ReferenceImages) < profile.References.MinImages {
 		return BadAuthRequest(fmt.Sprintf("当前视频模型至少需要 %d 张参考图", profile.References.MinImages))

@@ -1,3 +1,4 @@
+import type { CanvasColorGrade } from "@/lib/canvas/canvas-color-grade";
 import type { PortraitTextureSettings } from "@/lib/canvas/canvas-portrait-texture";
 import type { StyleExecutionPlan } from "@/lib/canvas/style-profile";
 import type { SrtEntry, SubtitleHighlight, SubtitleStyle } from "@/types/timeline";
@@ -24,6 +25,15 @@ export enum CanvasNodeType {
     Video = "video",
     Audio = "audio",
     Frame = "frame",
+    // 扩展节点：展示与加工。新增一个成员后，编译器会逐个点出还缺哪张表
+    // （NODE_DEFAULT_SIZE / NODE_SPECS / 节点注册表定义 / nodeContentRenderers）。
+    Markdown = "markdown",
+    Svg = "svg",
+    Html = "html",
+    Panorama = "panorama",
+    Compare = "compare",
+    Chart = "chart",
+    ColorGrade = "colorgrade",
 }
 
 export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
@@ -41,7 +51,7 @@ export type CanvasGenerationBatchStatus = "queued" | "running" | "partial_failed
 export type CanvasGenerationBatchItemStatus = "waiting" | "submitting" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type CanvasImageGenerationType = "generation" | "edit";
 export type CanvasWorkflowKind = "free" | "script" | "story_input" | "character" | "location" | "prop" | "scene" | "storyboard" | "shot" | "acting" | "prompt_pack" | "generation" | "final" | "styleboard" | "reference_set" | "reference_video" | "action_board" | "ecommerce_production" | "production_frame" | "product_input" | "product_dna" | "model_profile" | "scene_pack" | "preset_snapshot" | "creative_direction" | "shot_plan" | "generation_request" | "generated_asset" | "qa_report" | "motion_plan" | "video_sequence" | "presentation_mode" | "scene_plan" | "creative_shot_plan" | "result" | "qc" | "needs_you";
-export type CanvasVideoEditOperation = "text_to_video" | "image_to_video" | "extend" | "inpaint" | "replace_element" | "camera_motion" | "style_transfer" | "audio_to_video" | "compare_versions" | "concat";
+export type CanvasVideoEditOperation = "text_to_video" | "image_to_video" | "reference_to_video" | "extend" | "inpaint" | "replace_element" | "camera_motion" | "style_transfer" | "audio_to_video" | "compare_versions" | "concat";
 export type CanvasSkillCategory = "writing" | "storyboard" | "image" | "video" | "utility";
 export type CanvasSkillOutputMode = "text" | "json" | "image_prompt" | "workflow";
 export type StoryboardColumn =
@@ -259,6 +269,9 @@ export type CanvasNodeMetadata = {
     taskProgress?: number;
     taskStage?: string;
     taskProvider?: string;
+    taskStartedAt?: string;
+    taskCompletedAt?: string;
+    taskDurationMs?: number;
     taskErrorCode?: string;
     taskOfficialStatus?: "pending" | "processing" | "completed" | "failed" | "cancelled";
     taskReceiptRecorded?: boolean;
@@ -276,6 +289,7 @@ export type CanvasNodeMetadata = {
     };
     sessionId?: string;
     videoEditOperation?: CanvasVideoEditOperation;
+    arkPrivateAssetUpload?: string;
     videoCameraMoveId?: string;
     videoCameraMovePrompt?: string;
     videoStartFrameNodeId?: string;
@@ -297,6 +311,12 @@ export type CanvasNodeMetadata = {
     skillId?: string;
     skillVersion?: number;
     skillSnapshot?: CanvasSkillSnapshot;
+    /** 图表节点的图形类型，缺省柱状图。落盘字段——新增扩展节点的自有字段都要在这里声明。 */
+    chartKind?: "bar" | "line";
+    /** 调色节点的参数；缺省视为未调色。 */
+    colorGrade?: CanvasColorGrade;
+    /** 用户手动拉伸过尺寸；图片按真实比例自动适配时避让它。 */
+    manualSize?: boolean;
     storyboard?: StoryboardData;
     storyboardShotDuration?: StoryboardShotDuration;
     storyboardShotCount?: StoryboardShotCount;

@@ -193,7 +193,7 @@ func TestFilmAgentRuntimeHTTPContract(t *testing.T) {
 func TestFilmAgentCloseoutHTTPContract(t *testing.T) {
 	router, cookie, project, repo, db := newFilmAgentRuntimeTestRouter(t)
 	createResponse := filmAgentRuntimeRequest(t, router, http.MethodPost, "/api/projects/"+project.ID+"/film/agent-runs",
-		`{"objective":"检查连续性","intentRouteId":"IR-12"}`, cookie, "film-http-closeout-0001")
+		fmt.Sprintf(`{"objective":"检查连续性","intentRouteId":"IR-12","logicalModelId":%q}`, handlerFilmAgentLogicalModelID), cookie, "film-http-closeout-0001")
 	if createResponse.Code != http.StatusOK {
 		t.Fatalf("create closeout RootRun status = %d, body = %s", createResponse.Code, createResponse.Body.String())
 	}

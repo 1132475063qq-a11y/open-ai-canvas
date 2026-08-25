@@ -1,7 +1,6 @@
 import { DREAMINA_SUBMIT_ERROR_MESSAGES, generationErrorMessage } from "@/lib/generation-error";
 import { apiClient, request, type BackendEnvelope } from "@/services/api/request";
 import {
-    cancelLocalDreaminaGenerationTask,
     deleteLocalDreaminaGenerationTask,
     listLocalDreaminaGenerationTaskPage,
     queryLocalDreaminaGenerationTask,
@@ -407,10 +406,10 @@ export function queryFailedVideoProviderTask(id: string) {
     return request<ProviderTaskQueryResult>(api.post(`/tasks/${encodeURIComponent(id)}/query-provider`));
 }
 
+// Film production owns an explicit cancel flow for its persisted Attempt.
+// Generic task pages intentionally do not expose this operation.
 export function cancelGenerationTask(id: string) {
-    if (isLocalDreaminaTaskId(id)) {
-        return cancelLocalDreaminaGenerationTask(stripLocalDreaminaTaskPrefix(id)).then((task) => projectLocalDreaminaTask(task));
-    }
+    if (isLocalDreaminaTaskId(id)) return Promise.reject(new Error("本机任务不支持 Film 制作取消流程"));
     return request<GenerationTask>(api.post(`/tasks/${encodeURIComponent(id)}/cancel`));
 }
 
@@ -531,8 +530,7 @@ export async function waitForGenerationTask(id: string, options?: { signal?: Abo
         }
     } catch (error) {
         if (options?.signal?.aborted) {
-            await cancelGenerationTask(id).catch(() => undefined);
-            window.dispatchEvent(new CustomEvent("wallet:updated"));
+            // Abort 只停止当前页面的状态监听，不能把已发起的上游任务改成取消状态。
             throw new DOMException("Aborted", "AbortError");
         }
         throw error;

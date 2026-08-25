@@ -31,6 +31,7 @@ const (
 	ResultKindFilmGeneration     = "film_generation_result"
 	ResultAvailabilityReady      = "AVAILABLE"
 	ResultAvailabilityUnknown    = "UNKNOWN"
+	FilmAgentTaskType            = "canvas_text_film_agent"
 	FilmProductionTaskTypeImage  = "canvas_image_film_production"
 	FilmProductionTaskTypeVideo  = "canvas_video_film_production"
 	FilmVisualQCTaskTypeImage    = "canvas_text_film_visual_qc"
@@ -40,6 +41,10 @@ const (
 
 func IsFilmProductionTaskType(taskType string) bool {
 	return taskType == FilmProductionTaskTypeImage || taskType == FilmProductionTaskTypeVideo
+}
+
+func IsFilmAgentTaskType(taskType string) bool {
+	return taskType == FilmAgentTaskType
 }
 
 // IsFilmManagedTaskType identifies Film tasks whose route, billing and retry

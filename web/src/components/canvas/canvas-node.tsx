@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { AlertCircle, BookOpenCheck, CheckCircle2, ChevronRight, Clapperboard, Copy, Download, Image as ImageIcon, Lock, Maximize2, Music2, Pencil, Plus, RefreshCw, Replace, Settings2, Star, Trash2, Type, Upload, Video } from "lucide-react";
+import { AlertCircle, BookOpenCheck, CheckCircle2, ChevronRight, Clapperboard, Copy, Download, Image as ImageIcon, Lock, Maximize2, Music2, Pencil, Plus, RefreshCw, Settings2, Star, Trash2, Type, Video } from "lucide-react";
 
 import { useCanvasNodeActions } from "./canvas-node-action-context";
 
@@ -49,7 +49,6 @@ type CanvasNodeProps = {
     onToggleBatch?: (nodeId: string) => void;
     onSetBatchPrimary?: (node: CanvasNodeData) => void;
     onRetry?: (node: CanvasNodeData) => void;
-    onCancelTask?: (node: CanvasNodeData) => void;
     onOpenTaskDetails?: (node: CanvasNodeData) => void;
     onOpenVersions?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
@@ -93,11 +92,9 @@ export const CanvasNode = React.memo(function CanvasNode({
     onToggleBatch,
     onSetBatchPrimary,
     onRetry,
-    onCancelTask,
     onOpenTaskDetails,
     onOpenVersions,
     onViewImage,
-    onReplaceMedia,
     onOpenTextEditor,
     onOpenDirector,
     onOpenDrawing,
@@ -112,8 +109,8 @@ export const CanvasNode = React.memo(function CanvasNode({
     const hasImageContent = data.type === CanvasNodeType.Image && Boolean(data.metadata?.content);
     const hasVideoContent = data.type === CanvasNodeType.Video && Boolean(data.metadata?.content);
     const hasAudioContent = data.type === CanvasNodeType.Audio && Boolean(data.metadata?.content);
+    const isComposerNode = data.type === CanvasNodeType.Config;
     const hasMediaContent = hasImageContent || hasVideoContent || hasAudioContent;
-    const hasReplaceAction = !readOnly && (data.type === CanvasNodeType.Image || data.type === CanvasNodeType.Video);
     const isBatchRoot = data.type === CanvasNodeType.Image && Boolean(data.metadata?.isBatchRoot) && batchCount > 1;
     const isBatchChild = data.type === CanvasNodeType.Image && Boolean(data.metadata?.batchRootId);
     const showStatusTrack = Boolean(resourceLabel || data.metadata?.locked || isBatchRoot || (isBatchChild && !readOnly) || (hasMediaContent && !readOnly));
@@ -293,7 +290,10 @@ export const CanvasNode = React.memo(function CanvasNode({
                 data-node-state={nodeState}
                 data-state={data.metadata?.status || (isActive ? "active" : isRelated ? "related" : "idle")}
                 style={{
-                    background: hasImageContent || hasVideoContent ? "transparent" : "var(--card-surface)",
+                    background: hasImageContent || hasVideoContent ? "transparent" : theme.node.fill,
+                    // 固定占位但不绘制描边，避免聚焦切换时边框宽度变化造成白边跳动。
+                    border: isComposerNode ? "0" : "1px solid transparent",
+                    boxShadow: isComposerNode ? "none" : isSelected || hovered ? theme.node.hoverShadow : theme.node.shadow,
                 }}
                 onMouseDown={(event) => onMouseDown(event, data.id)}
                 onDoubleClick={(event) => {
@@ -331,7 +331,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                     className={`relative flex h-full w-full items-center justify-center rounded-[inherit] ${isBatchRoot || data.type === CanvasNodeType.Script ? "overflow-visible" : "overflow-hidden"}`}
                     style={
                         {
-                            background: hasImageContent || hasVideoContent ? "transparent" : "var(--card-surface)",
+                            background: hasImageContent || hasVideoContent ? "transparent" : theme.node.fill,
                             "--batch-from-x": `${batchMotion?.x || 0}px`,
                             "--batch-from-y": `${batchMotion?.y || 0}px`,
                             "--batch-from-rotate": `${6 + (batchMotion?.index || 0) * 4}deg`,
@@ -360,31 +360,11 @@ export const CanvasNode = React.memo(function CanvasNode({
                         onContentChange={onContentChange}
                         onStopEditing={() => setIsEditingContent(false)}
                         onRetry={onRetry}
-                        onCancelTask={onCancelTask}
                         onOpenTaskDetails={onOpenTaskDetails}
                         onToggleBatch={() => onToggleBatch?.(data.id)}
                         reduceMediaEffects={reduceMediaEffects}
                     />
                 </div>
-
-                {hasReplaceAction && (!hasMediaContent || isSelected || hovered) ? (
-                    <div
-                        className="absolute right-3 top-3 z-[var(--node-z-overlay)]"
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onPointerDown={(event) => event.stopPropagation()}
-                    >
-                        <button
-                            type="button"
-                            className="canvas-node-inline-action grid size-9 place-items-center p-0 backdrop-blur-xl transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
-                            style={{ outlineColor: theme.accent.primary }}
-                            onClick={(event) => { event.stopPropagation(); onReplaceMedia?.(data); }}
-                            aria-label={hasMediaContent ? "替换媒体" : data.type === CanvasNodeType.Image ? "上传图片" : "上传视频"}
-                            title={hasMediaContent ? "替换媒体" : data.type === CanvasNodeType.Image ? "上传图片" : "上传视频"}
-                        >
-                            {hasMediaContent ? <Replace className="size-3.5" /> : <Upload className="size-3.5" />}
-                        </button>
-                    </div>
-                ) : null}
 
                 {data.type === CanvasNodeType.Text && data.metadata?.workflowKind !== "character" && !readOnly ? (
                     <div
@@ -424,7 +404,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                     </button>
                 ) : null}
                 {showStatusTrack ? (
-                    <div className={`absolute top-3 z-[var(--node-z-overlay)] flex min-w-0 items-center justify-end gap-1 ${hasReplaceAction ? "right-14" : "right-3"} ${data.metadata?.versionLabel ? "max-w-[calc(100%-104px)]" : "max-w-[calc(100%-24px)]"}`}>
+                    <div className={`absolute right-3 top-3 z-[var(--node-z-overlay)] flex min-w-0 items-center justify-end gap-1 ${data.metadata?.versionLabel ? "max-w-[calc(100%-104px)]" : "max-w-[calc(100%-24px)]"}`}>
                         {resourceLabel && data.type !== CanvasNodeType.Image ? <ResourceLabelBadge reference={resourceLabel} theme={theme} /> : null}
                         {hasMediaContent && !readOnly ? <ResourceStorageBadge storageKey={data.metadata?.storageKey} active={isActive} theme={theme} /> : null}
                         {isBatchRoot ? <BatchToggleBadge count={batchCount} expanded={batchExpanded} theme={theme} onToggle={() => onToggleBatch?.(data.id)} /> : null}
@@ -515,7 +495,6 @@ function areCanvasNodePropsEqual(previous: CanvasNodeProps, next: CanvasNodeProp
         previous.onToggleBatch === next.onToggleBatch &&
         previous.onSetBatchPrimary === next.onSetBatchPrimary &&
         previous.onRetry === next.onRetry &&
-        previous.onCancelTask === next.onCancelTask &&
         previous.onOpenTaskDetails === next.onOpenTaskDetails &&
         previous.onOpenVersions === next.onOpenVersions &&
         previous.onViewImage === next.onViewImage &&
@@ -636,7 +615,15 @@ function NodeExternalHeader({ node, scale, active, editable, editing, draft, the
     return (
         <div
             className="canvas-node-external-header absolute bottom-full left-0 z-[var(--node-z-overlay)] flex h-6 items-center gap-1 overflow-hidden"
-            style={{ maxWidth: maxHeaderWidth, color: active ? theme.node.text : theme.node.label, transform: `scale(var(--canvas-live-inverse-scale, ${inverseScale}))`, transformOrigin: "left bottom" }}
+            style={{
+                maxWidth: maxHeaderWidth,
+                borderRadius: "var(--r-sm)",
+                background: "transparent",
+                paddingInline: "var(--space-1-half)",
+                color: active ? theme.node.text : theme.node.label,
+                transform: `scale(var(--canvas-live-inverse-scale, ${inverseScale}))`,
+                transformOrigin: "left bottom",
+            }}
             onMouseDown={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
         >
@@ -645,8 +632,8 @@ function NodeExternalHeader({ node, scale, active, editable, editing, draft, the
                 <input
                     autoFocus
                     value={draft}
-                    className="h-6 min-w-20 max-w-[190px] flex-1 truncate rounded border bg-transparent px-1.5 text-xs font-medium outline-none"
-                    style={{ background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.node.text, boxShadow: "var(--elevation-card)" }}
+                    className="h-6 min-w-20 max-w-[190px] flex-1 truncate rounded bg-transparent px-1.5 text-xs font-medium outline-none"
+                    style={{ background: "transparent", color: theme.node.text }}
                     onChange={(event) => onDraftChange(event.target.value)}
                     onFocus={(event) => event.currentTarget.select()}
                     onBlur={onCommit}
@@ -657,7 +644,7 @@ function NodeExternalHeader({ node, scale, active, editable, editing, draft, the
                     aria-label="节点名称"
                 />
             ) : editable ? (
-                <button type="button" className="group flex min-w-0 flex-1 items-center gap-1 rounded px-0.5 text-xs font-medium outline-none transition-opacity hover:opacity-100 focus-visible:ring-1" style={{ opacity: active ? 1 : 0.78, "--tw-ring-color": theme.node.activeStroke } as React.CSSProperties} onClick={onEdit} aria-label={`编辑节点名称：${node.title}`}>
+                <button type="button" className="group flex min-w-0 flex-1 items-center gap-1 rounded px-0.5 text-xs font-medium outline-none transition-opacity hover:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1" style={{ opacity: active ? 1 : 0.78, outlineColor: theme.node.muted }} onClick={onEdit} aria-label={`编辑节点名称：${node.title}`}>
                     <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
                     <Pencil className="size-2.5 shrink-0 opacity-55 transition-opacity group-hover:opacity-100" />
                 </button>
