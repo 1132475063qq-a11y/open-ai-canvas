@@ -31,6 +31,8 @@ description: 导演分镜需转为可独立生成的 AI 视频镜头提示词时
 
 ## 完整分阶段工作流
 
+当用户要求“剧本转分镜提示词”“根据剧本生成视频 Prompt”或同类任务时，必须先读取 [`storyboard-prompt-standard.md`](references/storyboard-prompt-standard.md)，按其固定输出顺序交付；该文档是本域的标准化编译规则，不得仅凭自由发挥省略字段。
+
 1. 读取 ShotDecision 的目的、观众信息和不可改视觉锚点；未知模型能力标为未验证
 2. 为每段重复写完整可见人物（外形、服装状态、姿态）、场景、空间关系、道具和起始动作状态
 3. 将抽象情绪编译为可见行为、构图、光线、声音和时间轴；按时间段组织单一动作链与镜头运动
@@ -112,3 +114,4 @@ description: 导演分镜需转为可独立生成的 AI 视频镜头提示词时
 - [model-profiles/seedance-user-profile.md](references/model-profiles/seedance-user-profile.md)
 - [independent-shot-contract.md](references/independent-shot-contract.md)
 - [prompt-generation-loop.md](references/prompt-generation-loop.md)
+- [storyboard-prompt-standard.md](references/storyboard-prompt-standard.md)
