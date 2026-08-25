@@ -1,5 +1,10 @@
 # Continue Here
 
+> 当前账号交接请先阅读 [`ACCOUNT-HANDOFF.md`](./ACCOUNT-HANDOFF.md)。本文件是
+> `codex/converged-runtime` 收敛线的历史检查点；如果当前工作树位于
+> `codex/upstream-plugin-integration`，以交接文档和实际 `git status`/`git log` 为准，
+> 不要把本文件中的分支、进程或运行时数据误认为当前分支状态。
+
 ## Canonical Checkout
 
 - Working tree: `/Users/xiangyuqin/Documents/ChatGPT/无限画布-短剧/open-ai-canvas`
